@@ -7,9 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN useradd -r -s /bin/false flaskuser \
-    && chown -R flaskuser:flaskuser /app
-USER flaskuser
+# Buat folder instance agar SQLite volume bisa di-mount dengan benar
+RUN mkdir -p /app/instance
 
 EXPOSE 5000
 

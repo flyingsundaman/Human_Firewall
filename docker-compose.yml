@@ -77,6 +77,9 @@ services:
       - GOPHISH_API_KEY=${GOPHISH_API_KEY}
       - GOPHISH_API_URL=${GOPHISH_API_URL}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
     restart: unless-stopped
     networks:
       - hfl_network
@@ -96,6 +99,7 @@ services:
       - NEXT_PUBLIC_API_URL=http://flask_api:5000
       - NEXT_PUBLIC_BOT_USERNAME=${BOT_USERNAME}
       - API_URL=http://flask_api:5000
+      - SECRET_KEY=${SECRET_KEY}
     depends_on:
       - flask_api
     restart: unless-stopped
