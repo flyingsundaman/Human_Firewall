@@ -69,8 +69,8 @@ services:
       - flask_db:/app/instance   # Persistence SQLite Flask
     environment:
       - FLASK_APP=app.py
-      - FLASK_ENV=production
-      - FLASK_DEBUG=0
+      - FLASK_ENV=development
+      - FLASK_DEBUG=${FLASK_DEBUG:-0}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - SECRET_KEY=${SECRET_KEY}
       - BOT_USERNAME=${BOT_USERNAME}
@@ -79,7 +79,12 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-google/gemini-2.0-pro-exp-02-05:free}
+      # ─── DEV BYPASS AUTH ────────────────────────────────────────────────
+      # Set ke "true" untuk menonaktifkan auth saat development AI Behavioral.
+      # Baca dari .env — default "false" agar aman jika .env tidak ada.
+      # WAJIB set ke "false" atau hapus sebelum deploy ke production!
+      - DEV_BYPASS_AUTH=${DEV_BYPASS_AUTH:-false}
     restart: unless-stopped
     networks:
       - hfl_network
