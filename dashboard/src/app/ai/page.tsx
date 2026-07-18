@@ -250,7 +250,7 @@ export default function BehavioralAIPage() {
             <div className="ai-title-block">
               <div className="ai-badge-label"><Bot size={12} /> AI-Powered</div>
               <h1 className="ai-page-title">Behavioral Analysis</h1>
-              <p className="ai-page-subtitle">Analisis perilaku keamanan karyawan menggunakan Gemini AI</p>
+              <p className="ai-page-subtitle">Analisis perilaku keamanan karyawan menggunakan AI</p>
             </div>
           </div>
         </div>
@@ -287,7 +287,7 @@ export default function BehavioralAIPage() {
             <div className="ai-toolbar">
               <div className="ai-toolbar-info">
                 <Brain size={16} />
-                <span>Klasifikasi risiko seluruh karyawan oleh Gemini AI</span>
+                <span>Klasifikasi risiko seluruh karyawan oleh AI</span>
               </div>
               <button
                 className="ai-btn-refresh"
@@ -303,7 +303,7 @@ export default function BehavioralAIPage() {
             {classifyLoading && !classifyData && (
               <div className="ai-loading-state">
                 <Loader2 size={36} className="spin" />
-                <p>Gemini AI sedang menganalisis perilaku semua karyawan...</p>
+                <p>AI sedang menganalisis perilaku semua karyawan...</p>
                 <span>Proses ini memakan waktu 5-15 detik</span>
               </div>
             )}
@@ -620,7 +620,7 @@ export default function BehavioralAIPage() {
             {reportLoading && (
               <div className="ai-loading-state">
                 <Loader2 size={36} className="spin" />
-                <p>Gemini AI sedang menulis laporan {reportDays} hari terakhir...</p>
+                <p>AI sedang menulis laporan {reportDays} hari terakhir...</p>
                 <span>Mungkin memakan waktu 10-20 detik</span>
               </div>
             )}
