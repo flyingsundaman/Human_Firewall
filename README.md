@@ -131,4 +131,4 @@ Before committing and pushing any changes to a public repository:
     ```bash
     python restore_git_commit.py
     ```
-*(Note: Backup files and local databases are automatically excluded via `.gitignore`).*
+*(Note: Backup files and local databases are automatically excluded via `.gitignore`).* 
