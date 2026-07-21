@@ -5,8 +5,9 @@ import { usePolling } from '@/hooks/usePolling';
 import Logo from '@/components/Logo';
 import SidebarNav from '@/components/SidebarNav';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-import { Shield, AlertTriangle, Activity, CheckCircle2, TrendingUp, Trophy, FileWarning, Search, Bot, Server, Play, StopCircle, RefreshCw, Plus, Trash2, Mail, Users, Settings, Fish, Scale, Inbox, Sliders } from 'lucide-react';
+import { Shield, AlertTriangle, Activity, CheckCircle2, TrendingUp, Trophy, FileWarning, Search, Bot, Server, Play, StopCircle, RefreshCw, Plus, Trash2, Mail, Users, Settings, Fish, Scale, Inbox, Sliders, Brain } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import '../dashboard.css';
 
 /* ── Types matching API responses ─────────────────────────── */
@@ -129,6 +130,7 @@ const typeIcon: Record<string, React.ReactNode> = {
 
 export default function SOCAdminDashboard() {
   const { user, isAuthenticated, isLoading: authLoading, logout } = useAuth();
+  const router = useRouter();
   const [clock, setClock] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'threats' | 'leaderboard' | 'policy' | 'gophish' | 'webmail'>('overview');
 
@@ -388,6 +390,21 @@ export default function SOCAdminDashboard() {
               <span>Live</span>
             </div>
             <span className="clock mono">{clock}</span>
+            <button
+              onClick={() => router.push('/ai')}
+              title="Behavioral AI Analysis"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px',
+                border: '1px solid rgba(99,179,237,0.4)',
+                background: 'rgba(99,179,237,0.08)',
+                color: 'var(--info)',
+                cursor: 'pointer', padding: '4px 12px',
+                borderRadius: '4px', fontSize: '13px', fontWeight: 600,
+              }}
+            >
+              <Brain size={14} />
+              Behavioral AI
+            </button>
             <div className="user-badge" onClick={logout} title="Klik untuk logout" style={{ border: '1px solid rgba(248,113,113,0.3)', background: 'rgba(248,113,113,0.05)', cursor: 'pointer', padding: '4px 12px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span className="user-name" style={{ color: 'var(--danger)', fontSize: '13px', fontWeight: 600 }}>Logout</span>
             </div>
