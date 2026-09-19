@@ -73,27 +73,27 @@
 
 ```env
 # Flask Core
-SECRET_KEY=REDACTED_FLASK_SECRET_KEY
-ADMIN_PASSWORD=REDACTED_ADMIN_PASSWORD
-SERVICE_API_KEY=REDACTED_SERVICE_API_KEY
+SECRET_KEY=<set-via-secret-store>
+ADMIN_PASSWORD=<set-via-secret-store>
+SERVICE_API_KEY=<set-via-secret-store>
 DEV_BYPASS_AUTH=true
 
 # AI Providers (Pure LLM Router in backend/ai_router.py)
-OPENROUTER_API_KEY=
-GEMINI_API_KEY=
-GROQ_API_KEY=
+OPENROUTER_API_KEY=<set-via-secret-store>
+GEMINI_API_KEY=<set-via-secret-store>
+GROQ_API_KEY=<set-via-secret-store>
 
 # Telegram Bot & Scanners
-TELEGRAM_BOT_TOKEN=REDACTED_TELEGRAM_BOT_TOKEN
-SOC_CHAT_ID=-1003979650342
-VT_API_KEY=REDACTED_VT_API_KEY
-URLSCAN_API_KEY=REDACTED_URLSCAN_API_KEY
+TELEGRAM_BOT_TOKEN=<set-via-secret-store>
+SOC_CHAT_ID=<set-via-environment>
+VT_API_KEY=<set-via-secret-store>
+URLSCAN_API_KEY=<set-via-secret-store>
 
 # Webhook Tunnel (Active Cloudflare Tunnel)
 WEBHOOK_URL=https://objective-lived-travel-operating.trycloudflare.com
 
 # GoPhish
-GOPHISH_API_KEY=REDACTED_GOPHISH_API_KEY
+GOPHISH_API_KEY=<set-via-secret-store>
 GOPHISH_API_URL=https://gophish:3333
 ```
 
@@ -132,7 +132,7 @@ ngrok http --domain=disparity-stonework-shortness.ngrok-free.dev 5678
 docker compose ps
 
 # Check Telegram Webhook status
-python -c "import requests; print(requests.get('https://api.telegram.org/botREDACTED_TELEGRAM_BOT_TOKEN/getWebhookInfo').json())"
+python -c "import requests; print(requests.get('https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo').json())"
 
 # Check Flask API status
 curl http://localhost:5000/api/summary
