@@ -258,14 +258,16 @@ def proxy_config():
 def download_ca_cert():
     """Public endpoint to download the Afferent Reflex Proxy CA certificate for client installation."""
     from pathlib import Path
-    ca_path = Path("/app/../proxy/ssl/afferent-proxy-ca.crt")
-    if not ca_path.exists():
-        # Fallback to direct path inside project
-        ca_path = Path("/etc/afferent-proxy/afferent-proxy-ca.crt")
-    if not ca_path.exists():
-        local_path = Path(__file__).resolve().parent.parent.parent / "proxy" / "ssl" / "afferent-proxy-ca.crt"
-        ca_path = local_path
-    if not ca_path.exists():
+    project_root = Path(__file__).resolve().parent.parent.parent
+    candidates = [
+        Path("/app/../proxy/ssl/afferent-proxy-ca.crt"),
+        Path("/etc/afferent-proxy/afferent-proxy-ca.crt"),
+        project_root / "proxy" / "ssl" / "afferent-proxy-ca.crt",
+        project_root / "proxy" / "ssl_cert" / "afferent-proxy-ca.crt",
+        project_root / "afferent-proxy-ca.crt",
+    ]
+    ca_path = next((p for p in candidates if p.exists()), None)
+    if ca_path is None:
         return Response("CA certificate not found on server", status=404, mimetype="text/plain")
     return Response(
         ca_path.read_text(encoding="utf-8"),

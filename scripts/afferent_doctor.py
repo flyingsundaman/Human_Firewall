@@ -380,6 +380,40 @@ def run_doctor(directory: Path = ROOT, auto_fix: bool = False) -> int:
         else:
             record("WARN", ".env.proxy.local", "Missing .env.proxy.local", "Run: python scripts/afferent_doctor.py doctor --fix")
 
+    dash_env_path = directory / "dashboard/.env.local"
+    if (directory / "dashboard").is_dir() and env_path.is_file():
+        env_vars = parse_env_file(env_path)
+        dash_vars = parse_env_file(dash_env_path) if dash_env_path.is_file() else {}
+        required_dash_keys = ("API_URL", "NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_BASE_URL", "SERVICE_API_KEY", "AUTH_COOKIE_SECURE")
+        missing_dash = [k for k in required_dash_keys if not dash_vars.get(k)]
+        if not missing_dash and dash_vars.get("SERVICE_API_KEY") == env_vars.get("SERVICE_API_KEY"):
+            record("PASS", "dashboard/.env.local", "Synced with .env (BFF & Auth cookies ready)")
+        elif auto_fix:
+            dash_lines = [
+                f"API_URL={env_vars.get('API_URL', 'http://127.0.0.1:5000')}",
+                f"NEXT_PUBLIC_API_URL={env_vars.get('NEXT_PUBLIC_API_URL', 'http://127.0.0.1:5000')}",
+                f"NEXT_PUBLIC_BASE_URL={env_vars.get('NEXT_PUBLIC_BASE_URL', 'http://127.0.0.1:3000')}",
+                f"NEXT_PUBLIC_PROXY_URL={env_vars.get('PUBLIC_PROXY_URL', 'http://127.0.0.1:3128')}",
+                f"NEXT_PUBLIC_PROXY_PROBE_URL={env_vars.get('PUBLIC_PROXY_PROBE_URL', 'http://proxy-check.afferent.invalid/__afferent_probe__')}",
+                f"AUTH_COOKIE_SECURE={env_vars.get('AUTH_COOKIE_SECURE', 'false')}",
+                f"SERVICE_API_KEY={env_vars.get('SERVICE_API_KEY', '')}",
+                f"ALLOWED_ORIGINS={env_vars.get('ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000')}",
+                f"FILE_SCAN_MAX_MB={env_vars.get('FILE_SCAN_MAX_MB', '10')}",
+            ]
+            dash_env_path.write_text("\n".join(dash_lines) + "\n", encoding="utf-8")
+            fixes_applied.append("Synced dashboard/.env.local with root .env")
+            record("PASS", "dashboard/.env.local", "Auto-synced with root .env")
+        else:
+            record("WARN", "dashboard/.env.local", "Out of sync with root .env", "Run: python scripts/afferent_doctor.py doctor --fix")
+
+    next_cfg_path = directory / "dashboard/next.config.ts"
+    if next_cfg_path.is_file():
+        cfg_txt = next_cfg_path.read_text(encoding="utf-8")
+        if "allowedDevOrigins" in cfg_txt:
+            record("PASS", "Next.js Dev Origins", "allowedDevOrigins configured in next.config.ts")
+        else:
+            record("WARN", "Next.js Dev Origins", "allowedDevOrigins missing in dashboard/next.config.ts (blocks LAN/Tailscale JS hydration)")
+
     # -------------------------------------------------------------------------
     # 3. ML Models & Datasets Integrity
     # -------------------------------------------------------------------------
@@ -493,6 +527,30 @@ def run_doctor(directory: Path = ROOT, auto_fix: bool = False) -> int:
         record("PASS", "Testing Portal (:8089)", "Listening on :8089")
     else:
         record("WARN", "Testing Portal (:8089)", "Not listening on :8089", "Run: systemctl --user restart afferent-reports-server.service")
+
+    if check_tcp_port("127.0.0.1", 1025) and check_tcp_port("127.0.0.1", 8025):
+        import smtplib
+        import time
+        t0 = time.time()
+        try:
+            with smtplib.SMTP("127.0.0.1", 1025, timeout=3.0) as smtp:
+                smtp.ehlo()
+            elapsed_ms = (time.time() - t0) * 1000
+            record("PASS", "Mailpit OTP (:1025/:8025)", f"SMTP & Web Inbox ready ({elapsed_ms:.0f}ms greeting)")
+        except Exception as exc:
+            record(
+                "FAIL",
+                "Mailpit OTP (:1025/:8025)",
+                f"SMTP greeting timed out or failed ({exc})",
+                "Ensure MP_SMTP_DISABLE_RDNS=true on mailpit container and restart mailpit",
+            )
+    else:
+        record("WARN", "Mailpit OTP (:1025/:8025)", "Not listening on :1025/:8025", "Run: docker compose up -d mailpit")
+
+    if check_tcp_port("127.0.0.1", 3333) and check_tcp_port("127.0.0.1", 8080):
+        record("PASS", "GoPhish Engine (:3333/:8080)", "Admin & Phishing servers listening")
+    else:
+        record("WARN", "GoPhish Engine (:3333/:8080)", "Not listening on :3333/:8080", "Run: docker compose up -d gophish")
 
     # -------------------------------------------------------------------------
     # Summary

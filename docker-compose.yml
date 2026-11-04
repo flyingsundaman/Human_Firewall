@@ -50,6 +50,7 @@ services:
     environment:
       - MP_MAX_MESSAGES=500
       - MP_DATABASE=/data/mailpit.db
+      - MP_SMTP_DISABLE_RDNS=true
     volumes:
       - mailpit_data:/data
     healthcheck:

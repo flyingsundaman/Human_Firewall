@@ -40,6 +40,7 @@ secrets/
 *.p12
 *.pem
 proxy/ssl/
+proxy/ssl_cert/
 
 # IDE files
 .vscode/
