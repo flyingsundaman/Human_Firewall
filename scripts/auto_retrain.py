@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description="AFFERENT Continuous Learning & Model Retraining Engine")
     parser.add_argument("--now", action="store_true", help="Execute one continuous learning & retraining cycle immediately")
     parser.add_argument("--daemon", action="store_true", help="Run as long-running scheduler daemon")
-    parser.add_argument("--interval", type=int, default=3, help="Scheduler interval in hours (default: 3)")
+    parser.add_argument("--interval", type=int, default=2, help="Scheduler interval in hours (default: 2)")
     args = parser.parse_args()
 
     engine = get_engine()

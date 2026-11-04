@@ -170,7 +170,7 @@ def _database_dsn() -> str:
 
 def _get_pool():
     global _pool
-    if _pool is None:
+    if _pool is None or getattr(_pool, "closed", False):
         from psycopg.rows import dict_row
         from psycopg_pool import ConnectionPool
 

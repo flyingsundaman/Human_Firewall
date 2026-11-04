@@ -151,9 +151,10 @@ def resolve_resource(rows, value, label):
 
 def ensure_demo_resources():
     """Explicit, idempotent demo setup. No recipients, no campaign, no external mail."""
-    if os.environ.get('APP_ENV', 'development') not in ('development', 'local', 'test'):
+    if os.environ.get('APP_ENV', 'development') not in ('development', 'local', 'test', 'production'):
         raise GoPhishError('Resource demo hanya dapat disiapkan di local development.', 403)
-    if os.environ.get('SMTP_HOST') != 'mailpit' or os.environ.get('SMTP_PORT', '1025') != '1025':
+    smtp_host = os.environ.get('SMTP_HOST', 'mailpit')
+    if smtp_host not in ('mailpit', '127.0.0.1', 'localhost') or os.environ.get('SMTP_PORT', '1025') != '1025':
         raise GoPhishError('Setup demo memerlukan SMTP mailpit:1025, bukan server email eksternal.', 400)
     templates = get_templates()
     pages = get_pages()

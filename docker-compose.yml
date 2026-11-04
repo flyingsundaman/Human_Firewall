@@ -4,6 +4,8 @@ services:
   proxy_postgres:
     image: postgres:17-alpine
     container_name: hfl-proxy-postgres
+    ports:
+      - "127.0.0.1:5432:5432"
     env_file:
       - .env.proxy.local
     volumes:
@@ -21,6 +23,8 @@ services:
   proxy_redis:
     image: redis:7-alpine
     container_name: hfl-proxy-redis
+    ports:
+      - "127.0.0.1:6380:6379"
     env_file:
       - .env.proxy.local
     command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
@@ -41,7 +45,8 @@ services:
     image: axllent/mailpit@sha256:98b916bd3c8d61f7633a52d3ea2f58d00620cb01ca57ab59edde68c347a95365
     container_name: hfl-mailpit
     ports:
-      - "${MAILPIT_BIND_IP:-127.0.0.1}:8025:8025"
+      - "0.0.0.0:8025:8025"
+      - "127.0.0.1:1025:1025"
     environment:
       - MP_MAX_MESSAGES=500
       - MP_DATABASE=/data/mailpit.db

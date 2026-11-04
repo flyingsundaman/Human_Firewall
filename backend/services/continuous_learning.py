@@ -65,6 +65,24 @@ GOLDEN_BENIGN_DOMAINS = [
     "whatsapp.com",
 ]
 
+# Indonesian Critical National Infrastructure & Benign Anchors
+INDONESIAN_BENIGN_ANCHORS = [
+    # Banking & Financial Services
+    "bca.co.id", "klikbca.com", "mybca.bca.co.id", "bankmandiri.co.id", "livin.bankmandiri.co.id",
+    "bri.co.id", "brimo.bri.co.id", "bni.co.id", "cimbniaga.co.id", "octoclicks.co.id",
+    "btn.co.id", "bankbsi.co.id", "bi.go.id", "ojk.go.id", "lps.go.id",
+    # Higher Education (.ac.id)
+    "ugm.ac.id", "ui.ac.id", "itb.ac.id", "ipb.ac.id", "undip.ac.id", "its.ac.id",
+    "unair.ac.id", "unpad.ac.id", "unhas.ac.id", "telkomuniversity.ac.id", "binus.ac.id",
+    # Government & Public Services (.go.id)
+    "kemdiktisaintek.go.id", "apispada.kemdiktisaintek.go.id", "kominfo.go.id", "layanan.kominfo.go.id",
+    "kemkes.go.id", "kemenkeu.go.id", "pajak.go.id", "polri.go.id", "bps.go.id", "bkn.go.id",
+    "indonesia.go.id", "kemendagri.go.id", "kemenag.go.id", "kemdikbud.go.id",
+    # Major National Tech / Telecommunications
+    "tokopedia.com", "bukalapak.com", "traveloka.com", "blibli.com",
+    "telkomsel.com", "indosatooredoo.com", "xl.co.id", "myim3.isat.co.id",
+]
+
 # Golden Set of Known Phishing / Judol Patterns that MUST be detected
 GOLDEN_MALICIOUS_DOMAINS = [
     "phishing-verify-login-security.xyz",
@@ -127,13 +145,18 @@ class ContinuousLearningEngine:
             logger.debug("Live database feedback not queryable: %s", exc)
         return feedback
 
-    def load_clean_training_corpus(self, extractor: DomainFeatureExtractor) -> Tuple[List[Tuple[str, int, str]], List[Tuple[str, int, str]]]:
+    def load_clean_training_corpus(
+        self,
+        extractor: DomainFeatureExtractor,
+        extra_benign_anchors: Optional[List[str]] = None,
+        extra_threat_samples: Optional[List[str]] = None,
+    ) -> Tuple[List[Tuple[str, int, str]], List[Tuple[str, int, str]]]:
         """
         Builds a high-integrity training corpus:
         - Resolves label noise on authoritative platforms (Tranco Top 25K)
         - Ingests top Tranco benign anchors & national Indonesian domains
         - Ingests genuine phishing & online gambling (judol) threats
-        - Ingests live SOC feedback
+        - Ingests Indonesian infrastructure anchors and live SOC feedback
         """
         train_rows, val_rows = [], []
 
@@ -180,9 +203,16 @@ class ContinuousLearningEngine:
                             d = parts[1].strip().lower()
                             train_rows.append((d, 0, d))
 
-        # 3. Add Golden Benign infrastructure
-        for d in GOLDEN_BENIGN_DOMAINS:
+        # 3. Add Golden Benign infrastructure & National Anchors
+        for d in GOLDEN_BENIGN_DOMAINS + INDONESIAN_BENIGN_ANCHORS:
             train_rows.append((d, 0, d))
+            # Also add www. variation if root to ensure character n-grams have solid representation
+            if not d.startswith("www.") and "." in d:
+                train_rows.append((f"www.{d}", 0, f"www.{d}"))
+
+        if extra_benign_anchors:
+            for d in extra_benign_anchors:
+                train_rows.append((d, 0, d))
 
         # 4. Add Indonesian threats (Phishing & Judol)
         ood_csv = self.dataset_dir / "indonesian_threat_casestudy.csv"
@@ -194,6 +224,10 @@ class ContinuousLearningEngine:
                         train_rows.append((h, 1, h))
                     except Exception:
                         pass
+
+        if extra_threat_samples:
+            for d in extra_threat_samples:
+                train_rows.append((d, 1, d))
 
         # 5. Add Live SOC feedback
         feedback = self.collect_live_feedback()
@@ -211,10 +245,13 @@ class ContinuousLearningEngine:
                         continue
 
         # Deduplicate with Golden Benign priority
+        all_benign_guaranteed = set(GOLDEN_BENIGN_DOMAINS + INDONESIAN_BENIGN_ANCHORS + (extra_benign_anchors or []))
         unique_train = {}
         for h, l, reg in train_rows:
-            if h in GOLDEN_BENIGN_DOMAINS:
+            if h in all_benign_guaranteed:
                 unique_train[h] = (h, 0, reg)
+            elif h not in unique_train:
+                unique_train[h] = (h, l, reg)
             elif h not in unique_train:
                 unique_train[h] = (h, l, reg)
 
@@ -273,7 +310,13 @@ class ContinuousLearningEngine:
 
         return passed, gate_details
 
-    def run_cycle(self) -> Dict[str, Any]:
+    def run_cycle(
+        self,
+        extra_benign_anchors: Optional[List[str]] = None,
+        extra_threat_samples: Optional[List[str]] = None,
+        xgb_params: Optional[Dict[str, Any]] = None,
+        tfidf_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Execute one complete automated retraining & validation cycle."""
         with self._lock:
             start_time = time.perf_counter()
@@ -282,14 +325,20 @@ class ContinuousLearningEngine:
             extractor = DomainFeatureExtractor(str(self.tranco_path) if self.tranco_path.exists() else None)
 
             # 1. Load clean corpus
-            train_rows, val_rows = self.load_clean_training_corpus(extractor)
+            train_rows, val_rows = self.load_clean_training_corpus(
+                extractor,
+                extra_benign_anchors=extra_benign_anchors,
+                extra_threat_samples=extra_threat_samples,
+            )
             logger.info("Loaded %d de-noised training rows, %d validation rows.", len(train_rows), len(val_rows))
 
             # 2. Retrain base TF-IDF lexical pipeline on the enriched domain set
             logger.info("Training refreshed TF-IDF base pipeline...")
+            c_val = (tfidf_params or {}).get("C", 2.5)
+            ngram_max = (tfidf_params or {}).get("ngram_max", 5)
             tfidf_pipe = make_pipeline(
-                TfidfVectorizer(analyzer="char", ngram_range=(2, 5), min_df=2, max_features=60000, sublinear_tf=True),
-                LogisticRegression(C=2.5, solver="liblinear", random_state=42)
+                TfidfVectorizer(analyzer="char", ngram_range=(2, ngram_max), min_df=2, max_features=60000, sublinear_tf=True),
+                LogisticRegression(C=c_val, solver="liblinear", random_state=42)
             )
             tfidf_pipe.fit([r[0] for r in train_rows], [r[1] for r in train_rows])
 
@@ -300,16 +349,20 @@ class ContinuousLearningEngine:
 
             # 4. Train candidate XGBoost Meta-Learner
             logger.info("Fitting candidate XGBoost meta-learner...")
-            candidate = xgb.XGBClassifier(
-                n_estimators=140,
-                max_depth=4,
-                learning_rate=0.08,
-                subsample=0.85,
-                colsample_bytree=0.85,
-                eval_metric="logloss",
-                random_state=42,
-                n_jobs=4,
-            )
+            default_xgb = {
+                "n_estimators": 140,
+                "max_depth": 4,
+                "learning_rate": 0.08,
+                "subsample": 0.85,
+                "colsample_bytree": 0.85,
+                "eval_metric": "logloss",
+                "random_state": 42,
+                "n_jobs": 4,
+            }
+            if xgb_params:
+                default_xgb.update(xgb_params)
+
+            candidate = xgb.XGBClassifier(**default_xgb)
             candidate.fit(X_train, y_train)
 
             # 5. Quality Gate Assessment
@@ -394,8 +447,8 @@ def get_engine() -> ContinuousLearningEngine:
     return _engine_instance
 
 
-def start_scheduler(interval_hours: int = 3):
-    """Start background continuous learning daemon that triggers retraining every N hours."""
+def start_scheduler(interval_hours: int = 2):
+    """Start background continuous learning daemon that triggers retraining every N hours (default: 2 hours)."""
     global _scheduler_thread
     if _scheduler_thread is not None and _scheduler_thread.is_alive():
         return
