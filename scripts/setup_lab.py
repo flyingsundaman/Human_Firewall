@@ -108,9 +108,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--server-host', default='127.0.0.1', help='Server IPv4/DNS, without protocol or port')
     parser.add_argument('--certificates', action='store_true', help='Generate new lab PKI only, using Docker OpenSSL')
+    parser.add_argument('--doctor', action='store_true', help='Run installation & runtime health diagnostics')
+    parser.add_argument('--fix', action='store_true', help='Auto-fix permissions, missing ENV keys, and checksums during --doctor')
+    parser.add_argument('--interactive', '-i', action='store_true', help='Interactive guided .env configurator')
     args = parser.parse_args()
     try:
-        if args.certificates:
+        if args.doctor:
+            from afferent_doctor import run_doctor
+            raise SystemExit(run_doctor(ROOT, auto_fix=args.fix))
+        elif args.interactive:
+            from afferent_doctor import interactive_setup
+            raise SystemExit(interactive_setup(ROOT))
+        elif args.certificates:
             generate_certificates(args.server_host)
             print('Lab PKI created. Install public CA certificates only on authorized lab clients.')
         else:

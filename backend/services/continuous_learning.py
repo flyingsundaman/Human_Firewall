@@ -394,7 +394,16 @@ class ContinuousLearningEngine:
             self.base_model_dir.mkdir(parents=True, exist_ok=True)
 
             # Save base TF-IDF pipeline so stacker_scanner can use it
-            joblib.dump({"pipeline": tfidf_pipe, "calibrator": tfidf_pipe.named_steps["logisticregression"]}, self.base_model_dir / "classifier.joblib")
+            base_artifact_path = self.base_model_dir / "classifier.joblib"
+            joblib.dump({"pipeline": tfidf_pipe, "calibrator": tfidf_pipe.named_steps["logisticregression"]}, base_artifact_path)
+            base_manifest_path = self.base_model_dir / "manifest.json"
+            if base_manifest_path.exists():
+                try:
+                    base_manifest = json.loads(base_manifest_path.read_text(encoding="utf-8"))
+                    base_manifest["artifact_sha256"] = hashlib.sha256(base_artifact_path.read_bytes()).hexdigest()
+                    base_manifest_path.write_text(json.dumps(base_manifest, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
 
             # Save stacker model
             artifact = {

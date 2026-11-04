@@ -89,7 +89,7 @@
     "Holdout corpus is not a real-world traffic distribution"
   ],
   "enforcement_eligible": true,
-  "artifact_sha256": "16504b9c6c7b1729fce5b1acb592f4fd3b28f2dc915b8a639d5ae1d7ddba1441",
+  "artifact_sha256": "9d81bbd1a972bbc3b5d4a379cd6cf83a92b7769d4d5bdd1f6f0444bae4f9532d",
   "model_version": "domain-tfidf-lr-v1-a9045a3e485e",
   "cpu_inference_ms": {
     "p50": 0.772977999986324,

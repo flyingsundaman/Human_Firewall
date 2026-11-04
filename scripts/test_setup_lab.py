@@ -33,6 +33,22 @@ class SetupChecks(unittest.TestCase):
                 setup.validate_host(host)
         self.assertEqual(setup.validate_host('192.0.2.10'), '192.0.2.10')
 
+    def test_doctor_env_patch_preserves_secrets(self):
+        doc_spec = importlib.util.spec_from_file_location('afferent_doctor', Path(__file__).with_name('afferent_doctor.py'))
+        doctor = importlib.util.module_from_spec(doc_spec)
+        doc_spec.loader.exec_module(doctor)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / '.env.example').write_text((setup.ROOT / '.env.example').read_text(encoding='utf-8'), encoding='utf-8')
+            env_path, _, updated = doctor.write_or_update_env(directory, host='100.99.128.37', mode='standalone', vt_keys='a' * 32 + ',' + 'b' * 32)
+            self.assertFalse(updated)
+            first_env = doctor.parse_env_file(env_path)
+            self.assertEqual(first_env['VT_REQUESTS_PER_MINUTE'], '8')
+            # Second run with --update must preserve SECRET_KEY
+            doctor.write_or_update_env(directory, host='100.99.128.37', mode='standalone', force_update=True)
+            second_env = doctor.parse_env_file(env_path)
+            self.assertEqual(first_env['SECRET_KEY'], second_env['SECRET_KEY'])
+
 
 if __name__ == '__main__':
     unittest.main()
