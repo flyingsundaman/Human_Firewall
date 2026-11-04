@@ -9,6 +9,7 @@ modul ini adalah satu-satunya pintu masuk ke database.
 
 import sqlite3
 import hashlib
+import html
 import os
 import secrets
 import json
@@ -83,6 +84,18 @@ def init_db():
                            'file_sha256 TEXT', 'file_size INTEGER'):
             if not _column_exists(cursor, 'employee_url_reports', definition.split()[0]):
                 cursor.execute(f'ALTER TABLE employee_url_reports ADD COLUMN {definition}')
+        # Employee requests to open a blocked site. This is not a threat report: it has
+        # no scan, no reward and no proxy alert. SOC answers it: the domain is either
+        # allowed for everyone (the proxy only supports domain-wide rules) or kept blocked.
+        cursor.execute('''CREATE TABLE IF NOT EXISTS access_requests (
+            id TEXT PRIMARY KEY, account_id INTEGER NOT NULL, email TEXT NOT NULL,
+            domain TEXT NOT NULL, reason TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','allowed','denied')),
+            decision_note TEXT, decided_by TEXT, decided_at TEXT, request_id TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )''')
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_access_requests_open ON access_requests(account_id, domain) WHERE status='open'")
+        cursor.execute('CREATE INDEX IF NOT EXISTS ix_access_requests_status ON access_requests(status, created_at)')
         # Bounded PDF quarantine: never served or rendered; removed after VT
         # submission/completion or expiry. The worker survives browser disconnects.
         cursor.execute('''CREATE TABLE IF NOT EXISTS pdf_analysis_jobs (
@@ -122,6 +135,17 @@ def init_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS provider_request_budget (
             provider TEXT NOT NULL, minute INTEGER NOT NULL, requests INTEGER NOT NULL,
             PRIMARY KEY(provider, minute)
+        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS url_analysis_jobs (
+            id TEXT PRIMARY KEY, url TEXT NOT NULL, analysis_json TEXT NOT NULL,
+            analysis_id TEXT, done INTEGER NOT NULL DEFAULT 0,
+            attempts INTEGER NOT NULL DEFAULT 0, available_at INTEGER NOT NULL DEFAULT 0,
+            lease_until INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS url_scan_access (
+            account_id INTEGER NOT NULL, scan_id TEXT NOT NULL,
+            PRIMARY KEY(account_id, scan_id)
         )''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS local_llm_reviews (
             id TEXT PRIMARY KEY, domain TEXT NOT NULL, model TEXT NOT NULL,
@@ -204,6 +228,56 @@ def init_db():
             )
         ''')
 
+        # Audit trail for incident handling: who resolved, reopened or assigned an incident, when, and why.
+        if not _column_exists(cursor, 'incidents', 'assigned_to'):
+            cursor.execute('ALTER TABLE incidents ADD COLUMN assigned_to TEXT')
+        for definition in ('employee_report_id TEXT', 'reported_by TEXT', 'proxy_alert_id TEXT',
+                           'resolution TEXT', 'resolution_reason TEXT', 'resolved_by TEXT',
+                           'historical_import INTEGER NOT NULL DEFAULT 0'):
+            if not _column_exists(cursor, 'incidents', definition.split()[0]):
+                cursor.execute(f'ALTER TABLE incidents ADD COLUMN {definition}')
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS ux_incident_employee_report ON incidents(employee_report_id) WHERE employee_report_id IS NOT NULL')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS incident_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT NOT NULL,
+                actor_email TEXT NOT NULL,
+                actor_role TEXT NOT NULL,
+                event TEXT NOT NULL CHECK(event IN ('resolved','reopened','assigned','unassigned')),
+                note TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS ix_incident_events_ticket ON incident_events(ticket_id, id)')
+        for definition in ('before_state TEXT', 'after_state TEXT', 'request_id TEXT', 'source_alert TEXT'):
+            if not _column_exists(cursor, 'incident_events', definition.split()[0]):
+                cursor.execute(f'ALTER TABLE incident_events ADD COLUMN {definition}')
+        for operation in ('UPDATE', 'DELETE'):
+            cursor.execute(f'''CREATE TRIGGER IF NOT EXISTS incident_events_no_{operation.lower()}
+                BEFORE {operation} ON incident_events BEGIN SELECT RAISE(ABORT,'Incident audit is append-only'); END''')
+        # Link actual existing employee reports, including inconclusive evidence.
+        # Old tickets remain as historical records; no fabricated/demo rows added.
+        cursor.execute('''INSERT OR IGNORE INTO incidents(ticket_id,source_type,reported_url,divisi,severity,
+            vt_verdict,urlscan_verdict,employee_report_id,reported_by,proxy_alert_id,checklist,created_at,historical_import)
+            SELECT 'RPT-'||r.id,'real_world_report',r.url,COALESCE(u.divisi,'General'),
+            CASE WHEN r.verdict='malicious' THEN 'high' ELSE 'medium' END,
+            r.verdict,NULL,r.id,r.email,r.soc_alert_id,r.description,r.created_at,1
+            FROM employee_url_reports r LEFT JOIN user_history u ON lower(u.email)=lower(r.email)
+            WHERE r.report_type='url' ''')
+        # One row per week (Monday, UTC): lets the CISO page show a trend. The current week is updated in place.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS weekly_snapshots (
+                week_start TEXT PRIMARY KEY,
+                avg_score REAL NOT NULL,
+                people INTEGER NOT NULL,
+                high_risk INTEGER NOT NULL,
+                open_incidents INTEGER NOT NULL,
+                reports INTEGER NOT NULL,
+                clicks INTEGER NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Tabel registration_otp — menyimpan kode OTP pendaftaran Telegram
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS registration_otp (
@@ -229,9 +303,12 @@ def init_db():
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 password_changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_login_at TIMESTAMP
+                last_login_at TIMESTAMP,
+                language TEXT CHECK (language IN ('en', 'id'))
             )
         ''')
+        if not _column_exists(cursor, 'employee_accounts', 'language'):
+            cursor.execute("ALTER TABLE employee_accounts ADD COLUMN language TEXT CHECK (language IN ('en', 'id'))")
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS otp_challenges (
@@ -570,11 +647,17 @@ def init_db():
                 difficulty TEXT NOT NULL
             )
         ''')
+        # Added later: a short "why" shown after the answer. Older databases get the column and the seeded texts.
+        if 'explanation' not in [col[1] for col in cursor.execute('PRAGMA table_info(quiz_questions)').fetchall()]:
+            cursor.execute('ALTER TABLE quiz_questions ADD COLUMN explanation TEXT')
+        # English version of each question, stored beside the Indonesian one (same option order, so one correct index).
+        for column in ('question_text_en', 'options_en', 'explanation_en'):
+            if not _column_exists(cursor, 'quiz_questions', column):
+                cursor.execute(f'ALTER TABLE quiz_questions ADD COLUMN {column} TEXT')
 
         # Auto-seed if empty
         row = cursor.execute('SELECT COUNT(*) FROM quiz_questions').fetchone()
         if row and row[0] == 0:
-            import json
             questions_to_seed = [
                 # Phishing (10 questions)
                 {
@@ -796,6 +879,21 @@ def init_db():
                     INSERT INTO quiz_questions (question_text, options, correct_answer_index, category, difficulty)
                     VALUES (?, ?, ?, ?, ?)
                 ''', (q["question_text"], json.dumps(q["options"]), q["correct_answer_index"], q["category"], q["difficulty"]))
+
+        from services.exam_service import init_schema as init_exam_schema
+        init_exam_schema(conn)
+        from quiz_explanations import EXPLANATIONS
+        for question_text, why in EXPLANATIONS.items():
+            cursor.execute('UPDATE quiz_questions SET explanation = ? WHERE explanation IS NULL AND substr(question_text, 1, 80) = ?', (why, question_text))
+        # Older databases get the English texts too. Only empty fields are filled, so edits made by hand are kept.
+        from quiz_content_en import QUIZ_EN
+        for question_text, en in QUIZ_EN.items():
+            cursor.execute('''UPDATE quiz_questions SET
+                                  question_text_en = COALESCE(question_text_en, ?),
+                                  options_en = COALESCE(options_en, ?),
+                                  explanation_en = COALESCE(explanation_en, ?)
+                              WHERE substr(question_text, 1, 80) = ?''',
+                           (en['question'], json.dumps(en['options'], ensure_ascii=False), en['explanation'], question_text))
 
         conn.commit()
     finally:
@@ -1545,6 +1643,10 @@ def record_event(email: str, divisi: str, event_type: str,
                 UPDATE user_history SET points = ?, badge = ? WHERE email = ?
             ''', (new_points, classify_badge(new_points), email))
 
+            if source_receipt and source_receipt.startswith('gophish:'):
+                from services.exam_service import require_for_click
+                require_for_click(conn, email, campaign_id, new_points)
+
         elif event_type == "submitted_data":
             # Gamifikasi Step A.2: -20 poin tambahan kalau sampai submit
             # kredensial di fake-login (lebih berat daripada sekadar klik).
@@ -1832,6 +1934,32 @@ def create_incident(ticket_id: str, source_type: str, divisi: str,
         conn.commit()
     finally:
         conn.close()
+    # Only the most serious tickets interrupt people; everything else waits in the queue.
+    if severity == 'high':
+        notify_soc_of_severe_incident(ticket_id, divisi, reported_url)
+
+
+def notify_soc_of_severe_incident(ticket_id: str, divisi: str, reported_url: str = None):
+    """Email every active SOC analyst about a high-severity ticket. Never raises: a mail problem must not lose the ticket."""
+    if os.environ.get('SEVERE_INCIDENT_EMAIL_ENABLED', 'true').lower() not in ('true', '1', 'yes'):
+        return 0
+    try:
+        conn = get_connection()
+        try:
+            recipients = [r['email'] for r in conn.execute("SELECT email FROM employee_accounts WHERE role = 'soc' AND is_active = 1").fetchall()]
+        finally:
+            conn.close()
+        subject = f'[Afferent Reflex] High-severity incident {ticket_id}'
+        body = (f'<p>A high-severity incident was opened and needs a SOC owner.</p>'
+                f'<p><b>Ticket:</b> {html.escape(ticket_id)}<br><b>Division:</b> {html.escape(divisi or "-")}<br>'
+                f'<b>Reported address:</b> {html.escape(reported_url or "-")}</p>'
+                f'<p>Open the SOC dashboard, Incidents tab, to take it.</p>')
+        for email in recipients:
+            create_inbox_email(email, subject, body)
+        return len(recipients)
+    except Exception as exc:
+        print(f'SEVERE INCIDENT EMAIL WARNING: {exc}')
+        return 0
 
 
 def update_incident_status(ticket_id: str, status: str):
@@ -1859,6 +1987,64 @@ def update_incident_status(ticket_id: str, status: str):
 
         conn.commit()
         return cursor.rowcount > 0  # True kalau ada baris yang ke-update
+    finally:
+        conn.close()
+
+
+def apply_incident_change(ticket_id: str, actor_email: str, actor_role: str, *,
+                          status: str = None, note: str = None, assignee: str = None):
+    """One audited change to an incident: resolve, reopen, assign or unassign.
+
+    * Resolving needs a reason of at least 5 characters (the trail must say why).
+    * `assignee` is an email, or '' to unassign.
+    Returns the updated incident, or None when the ticket does not exist.
+    Raises ValueError for anything invalid; nothing is written in that case.
+    """
+    if status is None and assignee is None:
+        raise ValueError("Nothing to change: send a status or an assignee.")
+    if status is not None and status not in VALID_STATUSES:
+        raise ValueError(f"status must be one of {VALID_STATUSES}")
+    note = (note or '').strip()
+    if len(note) > 1000:
+        raise ValueError("Note must be at most 1000 characters.")
+    if status == 'closed' and len(note) < 5:
+        raise ValueError("Add a reason of at least 5 characters to resolve an incident.")
+
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute('SELECT * FROM incidents WHERE ticket_id = ?', (ticket_id,)).fetchone()
+            if not row:
+                return None
+            events = []
+            if status is not None and status != row['status']:
+                if status == 'closed':
+                    conn.execute('UPDATE incidents SET status = ?, closed_at = CURRENT_TIMESTAMP WHERE ticket_id = ?', (status, ticket_id))
+                    events.append(('resolved', note))
+                else:
+                    conn.execute('UPDATE incidents SET status = ?, closed_at = NULL WHERE ticket_id = ?', (status, ticket_id))
+                    events.append(('reopened', note or None))
+            if assignee is not None:
+                new_owner = assignee.strip().lower() or None
+                if new_owner != (row['assigned_to'] or None):
+                    conn.execute('UPDATE incidents SET assigned_to = ? WHERE ticket_id = ?', (new_owner, ticket_id))
+                    events.append(('assigned' if new_owner else 'unassigned', new_owner))
+            for event, event_note in events:
+                conn.execute('INSERT INTO incident_events (ticket_id, actor_email, actor_role, event, note) VALUES (?, ?, ?, ?, ?)',
+                             (ticket_id, actor_email, actor_role, event, event_note))
+            return dict(conn.execute('SELECT * FROM incidents WHERE ticket_id = ?', (ticket_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def list_incident_events(ticket_id: str, limit: int = 100):
+    """Newest first. Empty list for an incident with no recorded changes."""
+    conn = get_connection()
+    try:
+        rows = conn.execute('SELECT id, ticket_id, actor_email, actor_role, event, note, created_at FROM incident_events WHERE ticket_id = ? ORDER BY id DESC LIMIT ?',
+                            (ticket_id, limit)).fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()
 
@@ -3159,8 +3345,10 @@ def insert_incident(
         conn.close()
 
 
-def get_daily_question(email: str) -> dict:
-    """Retrieve 1 deterministic random question per day per user based on date + email seed."""
+def get_daily_question(email: str, lang: str = 'id') -> dict:
+    """Retrieve 1 deterministic random question per day per user based on date + email seed.
+
+    lang='en' returns the English text where it exists; questions without one are served in Indonesian."""
     conn = get_connection()
     try:
         today_str = date.today().isoformat()
@@ -3198,14 +3386,17 @@ def get_daily_question(email: str) -> dict:
 
         q_row = conn.execute('SELECT * FROM quiz_questions WHERE id = ?', (selected_id,)).fetchone()
         if q_row:
+            english = lang == 'en' and q_row["question_text_en"] and q_row["options_en"]
             return {
                 "completed_today": False,
                 "id": q_row["id"],
-                "question_text": q_row["question_text"],
-                "options": json.loads(q_row["options"]),
+                "question_text": q_row["question_text_en"] if english else q_row["question_text"],
+                "options": json.loads(q_row["options_en"] if english else q_row["options"]),
                 "correct_answer_index": q_row["correct_answer_index"],
                 "category": q_row["category"],
-                "difficulty": q_row["difficulty"]
+                "difficulty": q_row["difficulty"],
+                "explanation": (q_row["explanation_en"] or q_row["explanation"]) if english else q_row["explanation"],
+                "language": 'en' if english else 'id',
             }
         return None
     finally:
@@ -3510,5 +3701,47 @@ def delete_simulation_campaign(campaign_id: int):
         conn.execute('DELETE FROM simulation_campaigns WHERE id = ?', (campaign_id,))
         conn.commit()
         return True
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# WEEKLY TREND SNAPSHOTS
+# ---------------------------------------------------------------------------
+
+def _week_start(day=None):
+    from datetime import date, timedelta
+    day = day or date.today()
+    return (day - timedelta(days=day.weekday())).isoformat()
+
+
+def record_weekly_snapshot(day=None):
+    """Store (or refresh) this week's numbers. Scores use the same rules as the dashboard: points / 2, high risk below 60 points."""
+    conn = get_connection()
+    try:
+        people = conn.execute('SELECT points, click_count, reports_count_malicious FROM user_history WHERE divisi IS NOT NULL').fetchall()
+        total = len(people)
+        avg_score = round(sum(max(0, min(100, (r['points'] or 0) / 2.0)) for r in people) / total, 1) if total else 0.0
+        high_risk = sum(1 for r in people if (r['points'] or 0) < 60)
+        clicks = sum(r['click_count'] or 0 for r in people)
+        reports = sum(r['reports_count_malicious'] or 0 for r in people)
+        open_incidents = conn.execute("SELECT COUNT(*) FROM incidents WHERE status NOT IN ('closed', 'resolved')").fetchone()[0]
+        conn.execute('''
+            INSERT INTO weekly_snapshots (week_start, avg_score, people, high_risk, open_incidents, reports, clicks, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(week_start) DO UPDATE SET avg_score = excluded.avg_score, people = excluded.people,
+                high_risk = excluded.high_risk, open_incidents = excluded.open_incidents, reports = excluded.reports,
+                clicks = excluded.clicks, updated_at = CURRENT_TIMESTAMP
+        ''', (_week_start(day), avg_score, total, high_risk, open_incidents, reports, clicks))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_weekly_snapshots(weeks=12):
+    conn = get_connection()
+    try:
+        rows = conn.execute('SELECT week_start, avg_score, people, high_risk, open_incidents, reports, clicks FROM weekly_snapshots ORDER BY week_start DESC LIMIT ?', (weeks,)).fetchall()
+        return [dict(r) for r in reversed(rows)]
     finally:
         conn.close()

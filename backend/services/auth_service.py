@@ -20,7 +20,7 @@ import database
 from services.email_service import EmailDeliveryError, EmailService
 
 
-VALID_ROLES = {"employee", "phishing_admin", "soc", "grc", "ciso"}
+VALID_ROLES = {"employee", "phishing_admin", "soc"}
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PASSWORD_HASHER = PasswordHasher(
     time_cost=int(os.environ.get("ARGON2_TIME_COST", "3")),
@@ -30,6 +30,10 @@ PASSWORD_HASHER = PasswordHasher(
     salt_len=16,
     type=Type.ID,
 )
+
+
+# A login lasts one day from sign-in (absolute, not extended by activity). Override with AUTH_SESSION_TTL_SECONDS.
+SESSION_TTL_DEFAULT_SECONDS = 24 * 60 * 60
 
 
 class AuthError(RuntimeError):
@@ -48,6 +52,7 @@ class AuthIdentity:
     role: str
     division: str
     session_id: str
+    language: str | None = None  # chosen by the person; None until they choose
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +61,7 @@ class AuthIdentity:
             "userName": self.email.split("@", 1)[0].replace(".", " ").title(),
             "division": self.division or "General",
             "role": self.role,
+            "language": self.language,
         }
 
 
@@ -383,7 +389,7 @@ def request_login(*, email: str, password: str, ip_address: str, request_id: str
             """,
             (normalized,),
         ).fetchone()
-        if not account or not account["is_active"] or not _verify_password(account["password_hash"], password or ""):
+        if not account or not account["is_active"] or account['role'] not in VALID_ROLES or not _verify_password(account["password_hash"], password or ""):
             _audit(
                 conn,
                 email=normalized or "invalid",
@@ -490,12 +496,12 @@ def resend_otp(*, challenge_id: str, ip_address: str, request_id: str) -> dict[s
     try:
         row = conn.execute(
             """
-            SELECT c.*, a.email, a.is_active FROM otp_challenges c
+            SELECT c.*, a.email, a.is_active, a.role FROM otp_challenges c
             JOIN employee_accounts a ON a.id = c.account_id WHERE c.id = ?
             """,
             (challenge_id,),
         ).fetchone()
-        if not row or row["used_at"] or not row["is_active"]:
+        if not row or row["used_at"] or not row["is_active"] or row['role'] not in VALID_ROLES:
             raise AuthError("INVALID_CHALLENGE", "Sesi OTP tidak valid. Silakan masuk kembali.", 400)
         _rate_limit(conn, email=row["email"], ip_hash=ip_digest)
         cooldown = int(os.environ.get("OTP_RESEND_COOLDOWN_SECONDS", "60"))
@@ -572,7 +578,7 @@ def verify_login_otp(
             """,
             (challenge_id,),
         ).fetchone()
-        if not row or row["used_at"] or not row["is_active"]:
+        if not row or row["used_at"] or not row["is_active"] or row['role'] not in VALID_ROLES:
             raise AuthError("INVALID_CHALLENGE", "Sesi OTP tidak valid. Silakan masuk kembali.", 400)
         if _parse_db_timestamp(row["expires_at"]) <= _utcnow():
             conn.execute("UPDATE otp_challenges SET used_at = CURRENT_TIMESTAMP WHERE id = ?", (challenge_id,))
@@ -598,7 +604,7 @@ def verify_login_otp(
 
         raw_token = secrets.token_urlsafe(48)
         session_id = str(uuid.uuid4())
-        ttl_seconds = int(os.environ.get("AUTH_SESSION_TTL_SECONDS", "28800"))
+        ttl_seconds = int(os.environ.get("AUTH_SESSION_TTL_SECONDS", str(SESSION_TTL_DEFAULT_SECONDS)))
         expires_at = _utcnow() + timedelta(seconds=ttl_seconds)
         conn.execute("UPDATE otp_challenges SET used_at = CURRENT_TIMESTAMP WHERE id = ?", (challenge_id,))
         conn.execute(
@@ -621,9 +627,10 @@ def verify_login_otp(
             success=True, request_id=request_id, ip_hash=ip_digest,
         )
         conn.commit()
+        language = conn.execute("SELECT language FROM employee_accounts WHERE id = ?", (row["account_id"],)).fetchone()["language"]
         identity = AuthIdentity(
             account_id=row["account_id"], email=row["email"], role=row["role"],
-            division=row["divisi"], session_id=session_id,
+            division=row["divisi"], session_id=session_id, language=language,
         )
         return raw_token, identity.as_dict(), ttl_seconds
     except Exception:
@@ -642,7 +649,7 @@ def get_identity(raw_token: str) -> AuthIdentity | None:
         row = conn.execute(
             """
             SELECT s.id AS session_id, s.expires_at, s.revoked_at,
-                   a.id AS account_id, a.email, a.role, a.is_active,
+                   a.id AS account_id, a.email, a.role, a.is_active, a.language,
                    COALESCE(u.divisi, 'General') AS divisi
             FROM auth_sessions s
             JOIN employee_accounts a ON a.id = s.account_id
@@ -651,7 +658,7 @@ def get_identity(raw_token: str) -> AuthIdentity | None:
             """,
             (_session_hash(raw_token),),
         ).fetchone()
-        if not row or row["revoked_at"] or not row["is_active"]:
+        if not row or row["revoked_at"] or not row["is_active"] or row['role'] not in VALID_ROLES:
             return None
         if _parse_db_timestamp(row["expires_at"]) <= _utcnow():
             return None
@@ -662,8 +669,24 @@ def get_identity(raw_token: str) -> AuthIdentity | None:
         conn.commit()
         return AuthIdentity(
             account_id=row["account_id"], email=row["email"], role=row["role"],
-            division=row["divisi"], session_id=row["session_id"],
+            division=row["divisi"], session_id=row["session_id"], language=row["language"],
         )
+    finally:
+        conn.close()
+
+
+LANGUAGES = ("en", "id")
+
+
+def set_language(identity: AuthIdentity, language: str) -> str:
+    """Remember the language a person chose, so it follows them to other browsers and devices."""
+    if language not in LANGUAGES:
+        raise AuthError("INVALID_LANGUAGE", "Language must be en or id", 400)
+    conn = database.get_connection()
+    try:
+        conn.execute("UPDATE employee_accounts SET language = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (language, identity.account_id))
+        conn.commit()
+        return language
     finally:
         conn.close()
 

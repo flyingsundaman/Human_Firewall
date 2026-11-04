@@ -5,6 +5,7 @@ app.py — Flask API untuk Human Firewall Lite.
 from flask import Flask, Request, g, request, jsonify, render_template, redirect
 from flask_cors import CORS
 import database
+import json
 import os
 from dotenv import load_dotenv
 from security import (
@@ -20,6 +21,7 @@ load_dotenv(override=True)
 validate_runtime_security()
 
 from routes.threat import threat_bp
+from routes.access_requests import access_bp
 from routes.proxy import proxy_bp
 
 # Admin password, Flask session secret, and internal service key checks on startup
@@ -79,12 +81,14 @@ if env_flag('PROXY_FEATURE_ENABLED'):
     from services.proxy_store import init_proxy_runtime
     validate_runtime_configuration()
     init_proxy_runtime()
+    from services.incident_service import restore_historical_resolutions
+    restore_historical_resolutions()
     if env_flag('ML_LOCAL_ENABLED', default=True):
         from services.domain_scanner import warmup as warmup_domain_ml
         warmup_domain_ml()
         if env_flag('ML_CONTINUOUS_LEARNING_ENABLED', default=True):
             from services.continuous_learning import start_scheduler
-            interval_hours = int(os.environ.get('ML_RETRAIN_INTERVAL_HOURS', '3'))
+            interval_hours = int(os.environ.get('ML_RETRAIN_INTERVAL_HOURS', '2'))
             start_scheduler(interval_hours=interval_hours)
 
 # Ensure there is one server-side RBAC account for the existing administrator.
@@ -98,6 +102,8 @@ ai_cache.init_cache_table()
 
 # Register blueprints
 from routes.auth import auth_bp
+from routes.exam import exam_bp
+from routes.simulation_entry import simulation_entry_bp
 from routes.events import events_bp
 from routes.incidents import incidents_bp
 from routes.admin_api import admin_api_bp
@@ -105,17 +111,38 @@ from gamification_routes import gamification_bp
 from routes.ai_routes import ai_bp  # AI Behavioral Engine
 
 app.register_blueprint(auth_bp)
+app.register_blueprint(exam_bp)
+app.register_blueprint(simulation_entry_bp)
 app.register_blueprint(events_bp)
 app.register_blueprint(incidents_bp)
 app.register_blueprint(admin_api_bp)
 app.register_blueprint(gamification_bp)
 app.register_blueprint(threat_bp)
+app.register_blueprint(access_bp)
 app.register_blueprint(proxy_bp)
 app.register_blueprint(ai_bp)  # AI Behavioral: /api/ai/*
+
+
+@app.after_request
+def add_error_code(response):
+    """Every JSON error gets a stable `code` next to its text, so the dashboard can show it in the person's language.
+
+    Routes that already send a code keep it. Responses whose `error` is not a plain string (for example
+    the {code, message} envelope of the game routes) are left alone."""
+    if response.status_code >= 400 and response.is_json:
+        body = response.get_json(silent=True)
+        if isinstance(body, dict) and isinstance(body.get('error'), str) and 'code' not in body:
+            from services.error_codes import code_for
+            code = code_for(body['error'])
+            if code:
+                body['code'] = code
+                response.set_data(json.dumps(body))
+    return response
 
 # Public endpoints are deny-by-default. Entries below either perform their own
 # resource-level token validation or must be reachable before authentication.
 PUBLIC_ROUTES = {
+    'simulation_entry.enter', 'simulation_entry.track',
     'events.redirect_handler', 'events.fake_login_submit',
     'events.save_event', 'events.user_profile',
     'auth.admin_login', 'auth.admin_logout', 'health', 'static',

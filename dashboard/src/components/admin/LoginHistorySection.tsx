@@ -1,105 +1,51 @@
 'use client';
 
-import React from 'react';
-import { Server } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { AdminLoginEvent } from '@/components/admin/types';
+import DataTable, { type Column } from '@/components/ui/DataTable';
+import StatusChip from '@/components/ui/StatusChip';
+import StateMessage from '@/components/ui/StateMessage';
+import LoadGate from '@/components/ui/LoadGate';
+import type { LoadState } from '@/lib/loadState';
+import { useI18n } from '@/i18n/I18nProvider';
+import { parseUtcDate } from '@/components/admin/types';
+import type { MessageKey } from '@/i18n/messages';
 
 interface LoginHistorySectionProps {
   readOnly: boolean;
   loginHistory: AdminLoginEvent[] | { logs?: AdminLoginEvent[]; loginHistory?: AdminLoginEvent[] };
+  state?: LoadState;
 }
 
-export default function LoginHistorySection({ loginHistory }: LoginHistorySectionProps) {
-  const logs = Array.isArray(loginHistory)
-    ? loginHistory
-    : loginHistory?.logs || loginHistory?.loginHistory || [];
+export default function LoginHistorySection({ loginHistory, state }: LoginHistorySectionProps) {
+  const { t, lang } = useI18n();
+  const logs = Array.isArray(loginHistory) ? loginHistory : loginHistory?.logs || loginHistory?.loginHistory || [];
+
+  const columns: Column<AdminLoginEvent>[] = [
+    { key: 'email', header: t('login.col.person'), render: log => <span className="cell-clip" title={log.reason}>{log.email}</span> },
+    { key: 'role', header: t('soc.auth.role'), secondary: true, render: log => ['employee','soc','phishing_admin'].includes(log.role || '') ? t(`role.${log.role}` as MessageKey) : '—' },
+    { key: 'event', header: t('soc.auth.event'), render: log => ['password_failed','otp_requested','otp_resent','otp_verified','otp_failed','logout'].includes(log.event_type || '') ? t(`soc.auth.${log.event_type}` as MessageKey) : log.event_type?.replaceAll('_', ' ') || t('soc.auth.unknown') },
+    { key: 'time', header: t('login.col.time'), sortValue: log => log.login_time, render: log => <time dateTime={parseUtcDate(log.login_time).toISOString()} title={parseUtcDate(log.login_time).toLocaleString()}>{parseUtcDate(log.login_time).toLocaleString(lang === 'id' ? 'id-ID' : 'en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</time> },
+    { key: 'result', header: t('soc.auth.result'), render: log => log.success == null ? '—' : <StatusChip tone={log.success ? 'ok' : 'warn'}>{t(log.success ? 'soc.auth.success' : 'soc.auth.failed')}</StatusChip> },
+  ];
 
   return (
-    <>
-      {/* Central Login & Device Anomaly Audit Log */}
-      <div className="panel glass-card fade-up font-body" style={{
-        marginTop: '24px',
-        padding: '24px'
-      }}>
-        <div className="panel-header" style={{ marginBottom: '18px', borderBottom: '1px solid var(--border)', paddingBottom: '14px' }}>
-          <h2 className="panel-title font-heading" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
-            <Server size={20} style={{ color: '#2196F3' }} /> Login &amp; Device Audit Trail (Identity Security)
-          </h2>
-          <span className="font-mono-data" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent)', background: 'rgba(33, 150, 243, 0.1)', padding: '4px 10px', borderRadius: '12px', border: '1px solid var(--border)' }}>
-            {logs.length} logs detected
-          </span>
-        </div>
-        <div className="threat-table-wrap" style={{ borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border)' }}>
-          <table className="threat-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                <th style={{ width: '20%', textAlign: 'left', padding: '12px 16px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Employee</th>
-                <th style={{ width: '15%', textAlign: 'left', padding: '12px 16px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Division</th>
-                <th style={{ width: '15%', textAlign: 'left', padding: '12px 16px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Access Timestamp</th>
-                <th style={{ width: '15%', textAlign: 'left', padding: '12px 16px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Device</th>
-                <th style={{ width: '15%', textAlign: 'left', padding: '12px 16px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Location</th>
-                <th style={{ width: '10%', textAlign: 'left', padding: '12px 16px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Connection</th>
-                <th style={{ width: '10%', textAlign: 'left', padding: '12px 16px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Risk</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '30px', fontSize: '13px' }}>
-                    No login audit records found.
-                  </td>
-                </tr>
-              ) : (
-                logs.map((log, idx) => {
-                  let badgeBg = 'var(--bg-success)';
-                  let badgeColor = 'var(--text-success)';
-                  let badgeBorder = 'var(--border-success)';
-
-                  if (log.risk === 'HIGH' || log.risk === 'CRITICAL' || log.risk === 'DANGER') {
-                    badgeBg = 'var(--bg-danger)';
-                    badgeColor = 'var(--text-danger)';
-                    badgeBorder = 'var(--border-danger)';
-                  } else if (log.risk === 'MEDIUM' || log.risk === 'WARNING') {
-                    badgeBg = 'var(--bg-warning)';
-                    badgeColor = 'var(--text-warning)';
-                    badgeBorder = 'var(--border-warning)';
-                  }
-
-                  return (
-                    <tr key={log.id || idx} title={log.reason} style={{ borderBottom: idx < logs.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                      <td className="font-mono-data" style={{ fontWeight: 600, color: 'var(--text-primary)', padding: '12px 16px', fontSize: '13px' }}>{log.email}</td>
-                      <td style={{ color: 'var(--text-secondary)', padding: '12px 16px', fontSize: '12px' }}>{log.division}</td>
-                      <td className="font-mono-data" style={{ color: 'var(--text-muted)', padding: '12px 16px', fontSize: '12px' }}>{log.login_time}</td>
-                      <td style={{ color: 'var(--text-secondary)', padding: '12px 16px', fontSize: '12px' }}>{log.device}</td>
-                      <td style={{ color: 'var(--text-secondary)', padding: '12px 16px', fontSize: '12px' }}>{log.location}</td>
-                      <td style={{ padding: '12px 16px', fontSize: '12px' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>{log.network}</span>
-                        {log.vpn && (
-                          <span className="font-mono-data" style={{ fontSize: '9px', padding: '2px 6px', background: 'var(--bg-success)', color: 'var(--text-success)', border: '1px solid var(--border-success)', borderRadius: '4px', marginLeft: '6px', fontWeight: 700 }}>VPN</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '12px 16px' }}>
-                        <span className="font-body" style={{
-                          padding: '3px 8px',
-                          borderRadius: '6px',
-                          fontSize: '10px',
-                          fontWeight: 700,
-                          background: badgeBg,
-                          color: badgeColor,
-                          border: `1px solid ${badgeBorder}`,
-                          display: 'inline-block'
-                        }}>
-                          {log.risk}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+    <section className="ops-block" aria-labelledby="login-history-title">
+      <div className="ops-head">
+        <div><h3 id="login-history-title" className="visually-hidden">{t('login.title')}</h3><p className="emp-muted">{t('soc.auth.note')}</p></div>
+        <div className="ops-actions"><span className="emp-muted">{t('login.count', { n: logs.length })}</span>{state?.retry && <button className="btn" onClick={state.retry}><RefreshCw size={14} />{t('common.refresh')}</button>}</div>
       </div>
-    </>
+      <LoadGate state={state} errorTitle="err.logins">
+      <DataTable
+        caption={t('login.title')}
+        columns={columns}
+        rows={logs}
+        rowKey={log => String(log.id)}
+        pageSize={10}
+        density="comfortable"
+        empty={<StateMessage variant="empty" title={t('login.empty.title')} why={t('login.empty.why')} />}
+      />
+      </LoadGate>
+    </section>
   );
 }

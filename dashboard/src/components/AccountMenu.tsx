@@ -1,54 +1,41 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { KeyRound, LogOut, UserRound, X } from 'lucide-react';
+import { useI18n } from '@/i18n/I18nProvider';
+import Link from 'next/link';
+import ChangePasswordDialog from '@/components/ChangePasswordDialog';
+import { ChevronsUpDown, KeyRound, LogOut, Settings, UserRound } from 'lucide-react';
 
-export default function AccountMenu() {
+function initials(name: string): string {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]?.toUpperCase()).join('') || '?';
+}
+
+interface AccountMenuProps {
+  /** "pill" for top bars, "sidebar" for the bottom of the navigation. */
+  variant?: 'pill' | 'sidebar';
+  roleLabel?: string;
+}
+
+export default function AccountMenu({ variant = 'pill', roleLabel }: AccountMenuProps) {
   const { user, logout } = useAuth();
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmation, setConfirmation] = useState('');
-  const clear = () => { setCurrentPassword(''); setNewPassword(''); setConfirmation(''); setError(''); };
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (newPassword !== confirmation) { setError('Passwords do not match.'); return; }
-    setBusy(true); setError('');
-    try {
-      const res = await fetch('/api/auth/change-password', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || 'Password has not been changed.');
-      await logout();
-    } catch (err) { setError(err instanceof Error ? err.message : 'Could not reach the server.'); }
-    finally { setBusy(false); }
-  }
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const name = user?.userName || t('account.menu');
+  const summary = variant === 'sidebar'
+    ? <><span className="avatar" aria-hidden="true" data-initials={initials(name)} /><span className="sb-user-meta"><span>{name}</span>{roleLabel && <>{' '}<small>{roleLabel}</small></>}</span><ChevronsUpDown className="sb-user-chev" size={16} aria-hidden="true" /></>
+    : <><UserRound size={16} aria-hidden="true" /><span>{name}</span></>;
+
   return <>
     <details className="account-menu">
-      <summary className="user-badge"><UserRound size={16} /><span>{user?.userName || 'Account'}</span></summary>
+      <summary className={variant === 'pill' ? 'user-badge' : undefined} aria-label={[name, roleLabel].filter(Boolean).join(' ')}>{summary}</summary>
       <div className="account-dropdown">
         <p>{user?.email}</p>
-        <button type="button" onClick={() => { clear(); dialog.current?.showModal(); }}><KeyRound size={16} />Change password</button>
-        <button type="button" onClick={() => void logout()}><LogOut size={16} />Logout</button>
+        <Link href="/settings" className="account-link"><Settings size={16} aria-hidden="true" />{t('settings.title')}</Link>
+        <button type="button" onClick={() => setOpen(true)}><KeyRound size={16} aria-hidden="true" />{t('account.changePassword')}</button>
+        <button type="button" onClick={() => void logout()}><LogOut size={16} aria-hidden="true" />{t('account.logout')}</button>
       </div>
     </details>
-    <dialog ref={dialog} className="account-dialog" aria-labelledby="password-title" onClose={clear}>
-      <button type="button" className="account-close" aria-label="Close" disabled={busy} onClick={() => dialog.current?.close()}><X size={18} /></button>
-      <h2 id="password-title">Change password</h2>
-      <p>All sessions will end. Sign in again with your new password and OTP.</p>
-      <form onSubmit={submit} className="debt-form">
-        <label>Current password<input autoComplete="current-password" type="password" required maxLength={256} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} /></label>
-        <label>New password<input autoComplete="new-password" type="password" required minLength={12} maxLength={256} value={newPassword} onChange={e => setNewPassword(e.target.value)} /></label>
-        <label>Confirm password<input autoComplete="new-password" type="password" required minLength={12} maxLength={256} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
-        <small>At least 12 characters, with uppercase, lowercase, and numbers.</small>
-        {error && <p role="alert" className="debt-error">{error}</p>}
-        <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save & sign in again'}</button>
-      </form>
-    </dialog>
+    <ChangePasswordDialog open={open} onClose={() => setOpen(false)} />
   </>;
 }

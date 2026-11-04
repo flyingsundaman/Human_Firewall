@@ -198,7 +198,7 @@ def register_device(identity: Any, ip_address: str, label: str = "") -> dict[str
             "source_ip_hash": source_ip_hash(ip_address),
             "source_ip_hint": _ip_hint(ip_address),
         },
-        _env_int("PROXY_DEVICE_TTL_SECONDS", 28800),
+        _env_int("PROXY_DEVICE_TTL_SECONDS", 86400),
     )
     if not record:
         raise ProxyError(
@@ -212,7 +212,7 @@ def register_device(identity: Any, ip_address: str, label: str = "") -> dict[str
 def heartbeat_device(identity: Any, ip_address: str) -> dict[str, Any]:
     record = proxy_store.heartbeat_device(
         source_ip_hash(ip_address),
-        _env_int("PROXY_DEVICE_TTL_SECONDS", 28800),
+        _env_int("PROXY_DEVICE_TTL_SECONDS", 86400),
     )
     if not record or int(record["account_id"]) != int(identity.account_id):
         raise ProxyError(
@@ -581,7 +581,7 @@ def accept_ml_callback(payload: dict[str, Any]) -> dict[str, Any]:
 
 def manual_decision(
     *, domain_value: str, action: str, reason: str, identity: Any,
-    request_id: str, alert_id: str | None = None
+    request_id: str, alert_id: str | None = None, expires_in_days: int | None = None
 ) -> dict[str, Any]:
     domain = normalize_policy_domain(domain_value)
     action = action.strip().lower()
@@ -598,7 +598,7 @@ def manual_decision(
         "reason": reason.strip()[:1000],
         "confidence": 1.0,
         "model_version": None,
-        "expires_at": None,
+        "expires_at": _utcnow() + timedelta(days=expires_in_days) if expires_in_days else None,
         "updated_by": identity.email,
     }
     _before, row, resolved_alert = proxy_store.apply_manual_decision(

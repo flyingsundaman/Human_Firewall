@@ -1,65 +1,126 @@
 'use client';
 
-import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Flag, Mail, RefreshCw, Users, X, History } from 'lucide-react';
+import { FormEvent, useState } from 'react';
+import { Flag, Mail, RefreshCw, History } from 'lucide-react';
 import { usePolling } from '@/hooks/usePolling';
 import ThreatEvidence, { EmployeeReport } from '../ThreatEvidence';
+import AccessRequestsPanel from './AccessRequestsPanel';
+import Dialog from '@/components/ui/Dialog';
+import Field from '@/components/ui/Field';
+import KpiCard from '@/components/ui/KpiCard';
+import StateMessage from '@/components/ui/StateMessage';
+import StatusChip from '@/components/ui/StatusChip';
+import { useToast } from '@/components/ui/Toast';
+import { useI18n } from '@/i18n/I18nProvider';
+import type { MessageKey } from '@/i18n/messages';
+import DataTable from '@/components/ui/DataTable';
+import { useNow } from '@/hooks/useNow';
+import { formatAgo } from '@/lib/relativeTime';
+import NotificationDelivery, { type EducationDelivery } from './NotificationDelivery';
 
 type Employee = { id: number; email: string; divisi: string; points: number; canSend: boolean;
-  delivery: { sent_at: string | null; last_error: string | null; created_at: string; attempts: number } | null };
+  delivery: EducationDelivery | null };
 type Report = EmployeeReport;
-type Audit = { id: number; actor_email: string; actor_role: string; recipient: string; score: number; reason: string; created_at: string };
+type Audit = EducationDelivery & { id: number; actor_email: string; actor_role: string; recipient: string; score: number; reason: string; created_at: string };
 type Inbox = { employees: Employee[]; reports: Report[]; audit: Audit[]; threshold: number; emailEnabled: boolean; automatic: boolean; deliveryMode: string };
 
-export default function SecurityInboxSection() {
+type Tab = 'reports' | 'access' | 'employees' | 'audit';
+
+export default function SecurityInboxSection({ canDecideAccess = false, onOpenIncidents }: { canDecideAccess?: boolean; onOpenIncidents?: () => void }) {
+  const { t, lang } = useI18n();
+  const toast = useToast();
   const { data, error, isLoading, refresh } = usePolling<Inbox>('/api/admin/security-inbox', 10000);
-  const [tab, setTab] = useState<'reports' | 'employees' | 'audit'>('reports');
+  const [tab, setTab] = useState<Tab>('reports');
   const [selected, setSelected] = useState<Employee | null>(null);
-  const [reason, setReason] = useState('Please complete your security training and quizzes to improve phishing awareness.');
+  const [reason, setReason] = useState(() => t('inbox.dialog.default'));
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
   const [sendError, setSendError] = useState('');
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    if (selected) dialogRef.current?.showModal();
-  }, [selected]);
+  const [viewingReport, setViewingReport] = useState<Report | null>(null);
+  const now = useNow();
+  const selectedState = data?.employees.find(employee => employee.id === selected?.id);
+
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!selected) return;
-    setBusy(true); setSendError(''); setNotice('');
+    setBusy(true); setSendError('');
     try {
-      const res = await fetch('/api/admin/security-inbox', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: selected.id, reason }) });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || 'Warning has not been sent.');
-      setNotice('Warning queued for Mailpit. Track delivery in Warnings.');
+      const res = await fetch('/api/admin/security-inbox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: selected.id, reason }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || t('inbox.err.send'));
+      toast.show({ message: t('inbox.sent'), tone: 'ok' });
       setSelected(null); refresh();
-    } catch (err) { setSendError(err instanceof Error ? err.message : 'Warning has not been sent.'); }
+    } catch (err) { refresh(); setSendError(err instanceof Error && !(err instanceof TypeError) ? err.message : t('inbox.err.send')); }
     finally { setBusy(false); }
   }
-  return <section className="security-inbox">
-    <header className="inbox-hero glass-card"><div><span className="proxy-ops-kicker">HUMAN SECURITY WORKSPACE</span><h2>Security inbox</h2><p>Review reports and follow up on low scores.</p></div><button className="btn" onClick={refresh} disabled={isLoading}><RefreshCw size={16} />Refresh</button></header>
-    <div className="inbox-metrics"><div className="glass-card"><Flag size={20} /><strong>{data?.reports.length ?? '—'}</strong><span>Recent reports</span></div><div className="glass-card"><Users size={20} /><strong>{data?.employees.length ?? '—'}</strong><span>Scores below {data?.threshold ?? '—'}/200</span></div><div className="glass-card"><Mail size={20} /><strong>Mailpit</strong><span>{data?.automatic ? 'Automatic + manual approval' : 'Warnings approved by SOC/GRC'}</span></div></div>
-    {error && <p className="debt-error" role="alert">Could not refresh the inbox. Showing the last snapshot.</p>}
-    {notice && <p className="debt-notice" role="status">{notice}</p>}
-    <div className="debt-tabs" aria-label="Inbox categories"><button className={'btn ' + (tab === 'reports' ? 'btn-primary' : '')} aria-pressed={tab === 'reports'} onClick={() => setTab('reports')}><Flag size={15} aria-hidden="true" />Link reports</button><button className={'btn ' + (tab === 'employees' ? 'btn-primary' : '')} aria-pressed={tab === 'employees'} onClick={() => setTab('employees')}><Mail size={15} aria-hidden="true" />Education warnings</button><button className={'btn ' + (tab === 'audit' ? 'btn-primary' : '')} aria-pressed={tab === 'audit'} onClick={() => setTab('audit')}><History size={15} aria-hidden="true" />Delivery audit</button></div>
-    <div className="inbox-list">
-      {isLoading && !data && <p className="proxy-empty">Loading inbox…</p>}
-      {tab === 'reports' && data && <>
-        <p className="debt-help">Scan evidence supports review. Apply Block/Allow in Traffic & policies.</p>
-        {!data.reports.length && <div className="proxy-empty glass-card"><Flag size={24} />No reports yet.</div>}
-        {data.reports.map(report => <article key={report.id} className="inbox-item glass-card"><div className="inbox-item-top"><span className="badge" data-status={report.status}>{report.status.replaceAll('_', ' ')}</span><time>{report.created_at} UTC</time></div><h3>{report.url}</h3><p>{report.description || 'No description provided.'}</p><ThreatEvidence analysis={report.analysis} /><div className="inbox-item-footer"><span>{report.email}</span><span>Evidence: {report.verdict} · not a SOC decision</span></div></article>)}
-      </>}
-      {tab === 'employees' && data && <>
-        <p className="debt-help">Active employees with scores below {data.threshold}/200. Lab emails are captured by Mailpit, not delivered to external inboxes.</p>
-        {!data.employees.length && <div className="proxy-empty glass-card"><Users size={24} />No employees below the baseline.</div>}
-        {data.employees.map(employee => <article key={employee.id} className="inbox-item glass-card inbox-employee"><div><h3>{employee.email}</h3><p>{employee.divisi} · <strong>{employee.points}/200 points</strong></p><small>{employee.delivery ? employee.delivery.last_error === 'skipped_not_eligible' ? 'Cancelled: account or score is no longer eligible' : employee.delivery.sent_at ? `Sent to Mailpit · ${employee.delivery.sent_at} UTC` : employee.delivery.last_error ? 'Retry pending' : 'Queued — awaiting delivery' : 'No warning yet'}</small></div><button className="btn btn-primary" disabled={!employee.canSend || !data.emailEnabled} onClick={() => { setSelected(employee); setSendError(''); }}><Mail size={16} />{employee.canSend ? 'Send warning' : 'Queued / cooldown'}</button></article>)}
-      </>}
-      {tab === 'audit' && data && <>
-        {!data.audit.length && <div className="proxy-empty glass-card">No manual warning approvals yet.</div>}
-        {data.audit.map(item => <article key={item.id} className="inbox-item glass-card"><div className="inbox-item-top"><span className="badge">{item.actor_role.toUpperCase()} · Queued</span><time>{item.created_at} UTC</time></div><h3>{item.recipient}</h3><p>{item.reason}</p><small>Approved by {item.actor_email} · score at approval {item.score}/200. Track delivery in the Warnings tab.</small></article>)}
-      </>}
-    </div>
-    {selected && <dialog ref={dialogRef} aria-labelledby="warning-title" className="inbox-dialog" onCancel={event => { if (busy) event.preventDefault(); else setSelected(null); }}><button className="account-close" aria-label="Close" disabled={busy} onClick={() => setSelected(null)}><X size={20} /></button><h2 id="warning-title">Send an education warning</h2><p>{selected.email} · {selected.points}/200 points</p><form className="debt-form" onSubmit={send}><label>Message / reason<textarea autoFocus required minLength={5} maxLength={1000} rows={4} value={reason} onChange={event => setReason(event.target.value)} /></label><small>Delivery is audited and captured by Mailpit.</small>{sendError && <p role="alert" className="debt-error">{sendError}</p>}<button disabled={busy} className="btn btn-primary">{busy ? 'Queuing…' : 'Approve & send warning'}</button></form></dialog>}
-  </section>;
+
+  const status = (value: string) => (['pending_review', 'open', 'resolved'].includes(value) ? t(`inbox.status.${value}` as MessageKey) : value.replaceAll('_', ' '));
+  const tabs: { id: Tab; label: string; icon: typeof Flag }[] = [
+    { id: 'reports', label: t('inbox.tab.reports'), icon: Flag },
+    { id: 'access', label: t('acc.tab'), icon: Flag },
+    { id: 'employees', label: t('inbox.tab.warnings'), icon: Mail },
+    { id: 'audit', label: t('inbox.tab.audit'), icon: History },
+  ];
+
+  return (
+    <section className="ops-page" aria-label={t('inbox.title')}>
+      <div className="exec-kpis soc-inbox-summary">
+        <KpiCard label={t('inbox.m.reports')} value={data?.reports.length ?? '—'} />
+        <KpiCard label={t('inbox.m.low', { n: data?.threshold ?? '—' })} value={data?.employees.length ?? '—'} />
+      </div>
+      {error && <p className="field-error" role="alert">{t('inbox.err.refresh')}</p>}
+      <div className="ops-toolbar">
+        <div className="seg" role="group" aria-label={t('inbox.tabs')} style={{ flexWrap: 'wrap' }}>
+          {tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" aria-pressed={tab === id} onClick={() => setTab(id)}><Icon size={14} aria-hidden="true" />{label}</button>)}
+        </div>
+        <button type="button" className="btn" onClick={refresh} disabled={isLoading}><RefreshCw size={14} aria-hidden="true" /> {t('inbox.refresh')}</button>
+      </div>
+
+      {isLoading && !data && tab !== 'access' && <StateMessage variant="loading" title={t('inbox.loading')} />}
+
+      {tab === 'reports' && data && <div className="ops-block">
+        <div className="ops-head"><p className="emp-muted">{t('inbox.reports.help')}</p>{onOpenIncidents && <button className="btn" onClick={onOpenIncidents}>{t('soc.inbox.open')}</button>}</div>
+        <DataTable<Report> caption={t('inbox.tab.reports')} rows={data.reports} rowKey={r => r.id} pageSize={10} density="comfortable" onRowClick={setViewingReport} columns={[
+          { key: 'url', header: t('threat.col.indicator'), render: r => <span className="cell-clip" title={r.url}>{r.url}</span> },
+          { key: 'person', header: t('login.col.person'), secondary: true, render: r => <span className="cell-clip" title={r.email}>{r.email}</span> },
+          { key: 'status', header: t('soc.record.status'), render: r => <StatusChip tone={['resolved','false positive'].includes(r.status) ? 'ok' : 'open'}>{status(r.status)}</StatusChip> },
+          { key: 'time', header: t('soc.recorded'), secondary: true, render: r => formatAgo(r.created_at, lang, now) },
+        ]} empty={<StateMessage variant="empty" title={t('inbox.reports.empty')} why=" " />} />
+      </div>}
+
+      {tab === 'access' && <AccessRequestsPanel canDecide={canDecideAccess} />}
+
+      {tab === 'employees' && data && <div className="ops-block">
+        <p className="emp-muted">{t('inbox.emp.help', { n: data.threshold })}</p>
+        <DataTable<Employee> caption={t('inbox.tab.warnings')} rows={data.employees} rowKey={e => String(e.id)} pageSize={10} density="comfortable" columns={[
+          { key: 'employee', header: t('login.col.person'), render: e => <span className="cell-clip" title={e.email}>{e.email}<small className="cell-sub">{e.divisi}</small></span> },
+          { key: 'points', header: t('soc.points'), render: e => `${e.points}/200` },
+          { key: 'delivery', header: t('soc.record.status'), render: e => <NotificationDelivery delivery={e.delivery} /> },
+          { key: 'send', header: t('threat.col.remediation'), render: employee => <button type="button" className="btn" disabled={!employee.canSend || !data.emailEnabled} onClick={() => { setSelected(employee); setSendError(''); }}><Mail size={14} aria-hidden="true" />{employee.canSend ? t('inbox.emp.send') : t('inbox.emp.cooldown')}</button> },
+        ]} empty={<StateMessage variant="empty" title={t('inbox.emp.empty')} why=" " />} />
+      </div>}
+
+      {tab === 'audit' && data && <div className="ops-block">
+        <DataTable<Audit> caption={t('inbox.tab.audit')} rows={data.audit} rowKey={a => String(a.id)} pageSize={10} density="comfortable" columns={[
+          { key: 'recipient', header: t('login.col.person'), render: a => <span className="cell-clip" title={a.recipient}>{a.recipient}</span> },
+          { key: 'actor', header: t('aud.col.who'), secondary: true, render: a => <span className="cell-clip">{a.actor_email}</span> },
+          { key: 'reason', header: t('aud.col.reason'), render: a => <span className="cell-preview" title={a.reason}>{a.reason}</span> },
+          { key: 'delivery', header: t('soc.record.status'), render: a => <NotificationDelivery delivery={a} /> },
+          { key: 'at', header: t('soc.recorded'), secondary: true, render: a => formatAgo(a.created_at, lang, now) },
+        ]} empty={<StateMessage variant="empty" title={t('inbox.audit.empty')} why=" " />} />
+      </div>}
+
+      <Dialog open={viewingReport !== null} onClose={() => setViewingReport(null)} title={t('soc.source.employee')} size="md">
+        {viewingReport && <div className="audit-detail"><dl><div><dt>{t('threat.col.indicator')}</dt><dd>{viewingReport.url}</dd></div><div><dt>{t('login.col.person')}</dt><dd>{viewingReport.email}</dd></div><div><dt>{t('soc.record.status')}</dt><dd>{status(viewingReport.status)}</dd></div><div><dt>{t('aud.col.reason')}</dt><dd>{viewingReport.description || t('inbox.reports.nodesc')}</dd></div></dl><ThreatEvidence analysis={viewingReport.analysis} /></div>}
+      </Dialog>
+      <Dialog open={selected !== null} onClose={() => setSelected(null)} busy={busy} title={t('inbox.dialog.title')} description={selected ? t('inbox.dialog.person', { email: selected.email, points: selected.points }) : undefined}
+        footer={<>
+          <button type="button" className="btn" disabled={busy} onClick={() => setSelected(null)}>{t('common.cancel')}</button>
+          <button type="submit" form="warning-form" className="btn btn-primary" disabled={busy || !selectedState?.canSend || !data?.emailEnabled}>{busy ? t('inbox.dialog.submitting') : t('inbox.dialog.submit')}</button>
+        </>}>
+        <form id="warning-form" className="ui-form" onSubmit={send}>
+          <Field label={t('inbox.dialog.reason')} hint={t('inbox.dialog.note')} error={sendError}>{c => <textarea {...c} required minLength={5} maxLength={1000} rows={4} value={reason} onChange={event => setReason(event.target.value)} />}</Field>
+        </form>
+      </Dialog>
+    </section>
+  );
 }

@@ -1,19 +1,34 @@
+'use client';
+
 import Link from 'next/link';
-import { ArrowRight, ShieldCheck, ShieldAlert, Link2, Flag, LockKeyhole } from 'lucide-react';
-import '@/app/security-pages.css';
+import { ArrowRight, Flag, Link2, LockKeyhole, ShieldAlert } from 'lucide-react';
+import SecurityScreen from '@/components/ui/SecurityScreen';
+import { useI18n } from '@/i18n/I18nProvider';
 
-const signals = [
-  { Icon: ShieldAlert, title: 'Urgency is not proof', text: 'An unexpected password reset request can pressure you into acting before checking.' },
-  { Icon: Link2, title: 'Check the address, not the design', text: 'Convincing emails and login pages can be copied. Verify the sender and domain.' },
-  { Icon: Flag, title: 'When in doubt, report it', text: 'Use Report a link in your dashboard. Do not reply or forward the suspicious link.' },
-];
-
+/** Where a person lands after clicking a simulated phishing link: calm, specific, and useful. */
 export default function SimulationEducation() {
-  return <main className="security-screen" data-tone="education"><div className="security-workspace">
-    <header className="security-brand"><span><ShieldCheck size={25} /> AFFERENT<span className="security-brand-divider">/</span><small>Human Security</small></span><span className="security-status">Awareness simulation</span></header>
-    <article className="security-shell">
-      <section className="security-hero"><span className="security-icon"><ShieldAlert size={38} strokeWidth={1.6} /></span><span className="security-eyebrow">PAUSE. CHECK THE SIGNALS.</span><h1>This was a<br />phishing simulation.</h1><p className="security-lead">No password was changed. Use this moment to learn how convincing phishing can look.</p><div className="security-assurance"><LockKeyhole size={20} /><div><strong>Your credentials were not collected</strong><p>The demo records a submission event only. Email and password values are not sent or stored.</p></div></div><Link className="security-primary" href="/">Back to dashboard <ArrowRight size={17} /></Link></section>
-      <section className="security-guidance" aria-labelledby="education-next"><span className="security-eyebrow">WHAT TO REMEMBER</span><h2 id="education-next">Three habits that help</h2><div className="security-steps">{signals.map(({ Icon, title, text }, index) => <article key={title}><span className="security-step-icon"><Icon size={20} /></span><div><small>0{index + 1}</small><h3>{title}</h3><p>{text}</p></div></article>)}</div><div className="security-note"><strong>Use a trusted bookmark to open your work portal.</strong><p>If you entered a real password on a suspicious site, change it through the official portal and contact SOC.</p></div></section>
-    </article><footer className="security-footer"><span><ShieldCheck size={15} /> Learn from the simulation. Be ready for the real thing.</span><span>Click and submission events follow AFFERENT scoring. Updates may take a few seconds.</span></footer>
-  </div></main>;
+  const { t } = useI18n();
+  const habits = [
+    { Icon: ShieldAlert, title: t('edu.h1.title'), body: t('edu.h1.body') },
+    { Icon: Link2, title: t('edu.h2.title'), body: t('edu.h2.body') },
+    { Icon: Flag, title: t('edu.h3.title'), body: t('edu.h3.body') },
+  ];
+  return (
+    <SecurityScreen
+      tone="education" area={t('edu.area')} status={t('edu.status')}
+      icon={<ShieldAlert size={36} strokeWidth={1.6} />}
+      eyebrow={t('edu.eyebrow')} title={t('edu.title')} lead={t('edu.lead')}
+      heroExtra={<div className="sec-assure"><LockKeyhole size={20} aria-hidden="true" /><div><strong>{t('edu.assure.title')}</strong><p>{t('edu.assure.body')}</p></div></div>}
+      actions={<Link className="btn btn-light" href="/">{t('edu.back')} <ArrowRight size={16} aria-hidden="true" /></Link>}
+      guideEyebrow={t('edu.remember')} guideTitle={t('edu.habits')} guideId="education-next"
+      footerLeft={t('edu.footer')} footerRight={t('edu.footerNote')}
+    >
+      <ol className="sec-steps">
+        {habits.map(({ Icon, title, body }, index) => (
+          <li key={title}><span className="sec-step-icon" aria-hidden="true"><Icon size={20} /></span><div><small>0{index + 1}</small><h3>{title}</h3><p>{body}</p></div></li>
+        ))}
+      </ol>
+      <div className="sec-note"><strong>{t('edu.bookmark.title')}</strong><p>{t('edu.bookmark.body')}</p></div>
+    </SecurityScreen>
+  );
 }

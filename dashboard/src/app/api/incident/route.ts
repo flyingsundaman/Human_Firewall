@@ -8,11 +8,18 @@ export async function POST() {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    if (!body.ticket_id || !['open', 'closed'].includes(body.status)) {
-      return NextResponse.json({ error: 'ticket_id and valid status required' }, { status: 400 });
+    const hasStatus = body.status !== undefined;
+    const hasAssignee = body.assignee !== undefined;
+    if (!body.ticket_id || (!hasStatus && !hasAssignee) || (hasStatus && !['open', 'closed'].includes(body.status)) || (hasAssignee && !['me', ''].includes(body.assignee))) {
+      return NextResponse.json({ error: 'ticket_id and a valid status or assignee are required' }, { status: 400 });
     }
+    const payload: Record<string, string> = {};
+    if (hasStatus) payload.status = body.status;
+    if (hasAssignee) payload.assignee = body.assignee;
+    if (typeof body.note === 'string') payload.note = body.note;
+    if (typeof body.resolution === 'string') payload.resolution = body.resolution;
     const res = await fetchFlaskBackend(`/api/incidents/${encodeURIComponent(body.ticket_id)}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: body.status }),
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
     return NextResponse.json(await res.json(), { status: res.status });
   } catch {
@@ -28,7 +35,10 @@ export async function GET() {
     const incidents = (data.incidents || []).map((inc: Record<string, string | number>) => ({
       id: inc.ticket_id, timestamp: inc.created_at, type: inc.reported_url ? 'phishing_url' : 'threat_report',
       severity: inc.severity, source: inc.divisi || 'Employee report', target: inc.reported_url || inc.file_hash || 'N/A',
-      description: inc.vt_verdict || inc.urlscan_verdict || 'Report submitted via AFFERENT', status: inc.status,
+      description: inc.checklist || inc.vt_verdict || inc.urlscan_verdict || 'Report submitted via Afferent Reflex', status: inc.status,
+      assignee: inc.assigned_to || null,
+      reporter: inc.reported_by || null, origin: inc.employee_report_id ? 'employee_report' : 'legacy',
+      resolution: inc.resolution || null, resolutionReason: inc.resolution_reason || null,
     }));
     return NextResponse.json({ incidents, stats: {
       totalIncidents: incidents.length,

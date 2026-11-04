@@ -4,6 +4,12 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 
+// English strings come from the real message table so the test follows copy changes.
+const messageSource = ts.transpileModule(fs.readFileSync('src/i18n/messages.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+const messageExports = {};
+vm.runInNewContext(messageSource, { exports: messageExports });
+const i18nFixture = { useI18n: () => ({ lang: 'en', t: key => messageExports.en[key] }) };
+
 const states = [], deps = [], cleanup = [], effects = [], timers = new Map(), writes = [];
 let cursor = 0, effectCursor = 0, timerId = 0, rewards = 0;
 let result = { id: 'owned-scan', file_name: 'fixture.exe', file_size: 10, created_at: '2026-10-03',
@@ -28,7 +34,7 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/components/EmployeeUr
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText, {
   exports: exportsFixture, File, FormData, AbortController,
-  require: name => name === 'react' ? hooks : name === './ThreatEvidence' ? { default: () => null } : require(name),
+  require: name => name === 'react' ? hooks : name.endsWith('.css') ? {} : name === './ThreatEvidence' ? { default: () => null } : name === '@/i18n/I18nProvider' ? i18nFixture : require(name),
   window: { setInterval: callback => { timers.set(++timerId, callback); return timerId; }, clearInterval: id => timers.delete(id) },
   fetch: async (url, options = {}) => {
     if (options.method === 'POST') {
@@ -54,9 +60,13 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {
   render(); flush(); await settle();
-  find('button', node => text(node) === 'Scan file').props.onClick();
+  find('button', node => text(node) === 'Check file').props.onClick();
   const input = find('input', node => node.props.type === 'file');
   assert.equal(input.props.accept, undefined, 'formats are not restricted to PDF');
+  input.props.onChange({ target: { files: [new File(['MZ fixture'], 'fixture.exe')] } });
+  assert.ok(text(render()).includes('fixture.exe'), 'selected filename remains visible in the custom file control');
+  find('button', node => node.props['aria-label'] === 'Remove selected file').props.onClick();
+  assert.ok(!find('button', node => node.props['aria-label'] === 'Remove selected file'), 'clearing the choice resets the control');
   input.props.onChange({ target: { files: [new File(['MZ fixture'], 'fixture.exe')] } });
   await find('form').props.onSubmit({ preventDefault() {} });
   assert.equal(writes.length, 0, 'sharing consent is mandatory');
@@ -69,7 +79,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(rewards, 0, 'file checks do not trigger report scoring');
   render(); flush();
   assert.equal(timers.size, 1, 'pending scans refresh automatically');
-  find('button', node => text(node) === 'Scan URL').props.onClick();
+  find('button', node => text(node) === 'Check link').props.onClick();
   result = { ...result, status: 'completed', verdict: 'malicious', analysis: { verdict: 'malicious' } };
   await [...timers.values()][0]();
   const alert = nodes(render()).find(node => node.props?.className === 'file-scan-result');
@@ -78,7 +88,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
   assert.ok(text(alert).includes('Do not open or run it.'));
   assert.equal(alert.props.role, 'alert', 'a threat remains visible after switching tool tabs');
   flush(); assert.equal(timers.size, 0, 'completed jobs stop polling');
-  find('button', node => text(node) === 'Scan file').props.onClick();
+  find('button', node => text(node) === 'Check file').props.onClick();
   for (const verdict of ['clean', 'unknown']) {
     result = { ...result, verdict, status: verdict === 'unknown' ? 'unknown' : 'completed' };
     await find('button', node => text(node) === 'Refresh').props.onClick();

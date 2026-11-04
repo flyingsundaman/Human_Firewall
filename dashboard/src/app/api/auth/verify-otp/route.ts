@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     if (!backend.ok) return NextResponse.json(data, { status: backend.status });
 
     const sessionToken = data.sessionToken as string;
-    const expiresIn = Number(data.expiresIn || 28800);
+    const expiresIn = Number(data.expiresIn || 86400);
     delete data.sessionToken;
     const response = NextResponse.json(data, { status: 200 });
     response.cookies.set(AUTH_SESSION_COOKIE, sessionToken, {
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
     });
     return response;
   } catch {
-    return NextResponse.json({ error: 'Layanan autentikasi tidak tersedia' }, { status: 503 });
+    return NextResponse.json({ error: 'Layanan autentikasi tidak tersedia', code: 'SERVICE_UNAVAILABLE' }, { status: 503 });
   }
 }
 

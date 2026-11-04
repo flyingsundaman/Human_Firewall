@@ -3,6 +3,7 @@ import integrations
 import database
 from security import current_identity, authenticate_session_request, require_roles
 from werkzeug.exceptions import RequestEntityTooLarge
+from services.error_codes import error_body
 
 threat_bp = Blueprint("threat", __name__)
 
@@ -23,7 +24,7 @@ def employee_reports():
                                        request.headers.get("X-Request-ID") or str(uuid.uuid4()))
         return jsonify({"success": True, **result}), 200 if result["duplicate"] else 201
     except (ValueError, TypeError) as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify(error_body(exc)), 400
     except Exception:
         import logging
         logging.getLogger(__name__).exception("Employee report could not be persisted")
@@ -53,25 +54,31 @@ def employee_file_scan():
             request.headers.get('X-Request-ID') or str(uuid.uuid4()))
         return jsonify({'success': True, **result}), 200 if result['duplicate'] else 202
     except RequestEntityTooLarge:
-        return jsonify({'error': 'File upload exceeds the size limit.'}), 413
+        return jsonify({'error': 'File upload exceeds the size limit.', 'code': 'FILE_TOO_LARGE'}), 413
     except (ValueError, TypeError) as exc:
-        return jsonify({'error': str(exc)}), 400
+        return jsonify(error_body(exc)), 400
     except Exception:
         return jsonify({'error': 'File scan could not be accepted. Please retry.'}), 503
 
 
-@threat_bp.route('/api/threat/scan', methods=['POST'])
+@threat_bp.route('/api/threat/scan', methods=['GET', 'POST'])
 @require_roles('employee')
 def scan_url_reputation():
     from services import report_service
+    from services import url_scan_service
+    if request.method == 'GET':
+        analysis = url_scan_service.result(current_identity(), request.args.get('scanId', ''))
+        return (jsonify({'data': analysis}), 200) if analysis else (jsonify({'error': 'Scan not found.'}), 404)
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'A JSON object is required.'}), 400
     try:
         report_service.rate_limit(current_identity(), 'url-scan')
-        return jsonify({'success': True, 'data': report_service.analyze_url(body.get('url'))})
+        analysis = report_service.analyze_url(body.get('url'))
+        url_scan_service.grant(current_identity(), analysis.get('scanId'))
+        return jsonify({'success': True, 'data': analysis})
     except (ValueError, TypeError) as exc:
-        return jsonify({'error': str(exc)}), 400
+        return jsonify(error_body(exc)), 400
     except Exception:
         return jsonify({'error': 'Reputation providers are temporarily unavailable.'}), 503
 
@@ -141,7 +148,7 @@ def scan_dl():
 
 
 @threat_bp.route("/api/threat/model-status", methods=["GET"])
-@require_roles("soc", "ciso", "phishing_admin")
+@require_roles("soc", "phishing_admin")
 def model_status():
     import char_bilstm_scanner
     from services.domain_scanner import status as domain_status

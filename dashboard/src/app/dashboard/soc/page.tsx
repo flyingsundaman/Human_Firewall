@@ -1,107 +1,104 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/admin/DashboardLayout';
+import { useI18n } from '@/i18n/I18nProvider';
 import OverviewSection from '@/components/admin/OverviewSection';
-import IncidentTriageSection from '@/components/admin/IncidentTriageSection';
-import ThreatCacheSection from '@/components/admin/ThreatCacheSection';
-import LoginHistorySection from '@/components/admin/LoginHistorySection';
+import IncidentQueue from '@/components/admin/IncidentQueue';
 import { usePolling } from '@/hooks/usePolling';
-import type { Incident, Stats, ThreatCacheEntry, AISummary, BehaviorScore, ComplianceSummary, AdminLoginEvent } from '@/components/admin/types';
+import { useFetchOnce } from '@/hooks/useFetchOnce';
+import { loadState } from '@/lib/loadState';
+import type { Incident, Stats, ThreatCacheEntry, AISummary, BehaviorScore, AdminLoginEvent } from '@/components/admin/types';
+import AuditLogSection from '@/components/admin/AuditLogSection';
 import AIIntelligenceSection from '@/components/admin/AIIntelligenceSection';
-import ProxyOperationsSection from '@/components/admin/ProxyOperationsSection';
 import SecurityInboxSection from '@/components/admin/SecurityInboxSection';
+import TrafficPolicies from '@/components/admin/TrafficPolicies';
+import Tabs, { panelId, tabId } from '@/components/ui/Tabs';
+import '@/app/soc.css';
 
 export default function SOCDashboard() {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState('overview');
+  const [insightsView, setInsightsView] = useState('summary');
+  // A link such as /dashboard/soc?view=policies opens Traffic and policies straight away.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (new URLSearchParams(window.location.search).has('view')) setActiveTab('threats');
+  }, []);
+  const changeTab = (tab: string) => {
+    setActiveTab(tab);
+    if (tab !== 'threats' && window.location.search) window.history.replaceState(null, '', window.location.pathname);
+  };
   const [threatTypeFilter, setThreatTypeFilter] = useState('ALL');
   const [threatActionFilter, setThreatActionFilter] = useState('ALL');
-  const [loginHistory, setLoginHistory] = useState<AdminLoginEvent[]>([]);
 
   // Polling core data
-  const { data: incidentData, hasUpdated: incidentUpdated } = usePolling<{ incidents: Incident[]; stats: Stats }>('/api/incident', 3000);
-  const { data: cacheData, hasUpdated: cacheUpdated } = usePolling<{ cache: ThreatCacheEntry[] }>('/api/cache', 3000);
-  const { data: summaryData, hasUpdated: summaryUpdated, refresh: refreshSummary, error: summaryError } = usePolling<{ summaries: AISummary[] }>('/api/summary', 10000);
-  const { data: behaviorData, hasUpdated: behaviorUpdated, error: behaviorError } = usePolling<{ scores: BehaviorScore[] }>('/api/behavior', 10000);
-  const { data: complianceData } = usePolling<ComplianceSummary>('/api/admin/compliance-summary', 3000);
-
+  const { data: incidentData, hasUpdated: incidentUpdated, isLoading: incidentsLoading, error: incidentsError, refresh: refreshIncidents } = usePolling<{ incidents: Incident[]; stats: Stats }>('/api/incident', 30000);
   useEffect(() => {
-    fetch('/api/admin/login-history')
-      .then(async r => (r.ok ? r.json() : null))
-      .then(data => data && setLoginHistory(Array.isArray(data) ? data : data.logs || []))
-      .catch(() => {});
-  }, []);
+    if (activeTab !== 'overview') return;
+    const stream = new EventSource('/api/proxy/alerts/stream');
+    stream.addEventListener('ready', refreshIncidents);
+    stream.addEventListener('update', refreshIncidents);
+    return () => stream.close();
+  }, [activeTab, refreshIncidents]);
+  const { data: cacheData, hasUpdated: cacheUpdated, isLoading: cacheLoading, error: cacheError, refresh: refreshCache } = usePolling<{ cache: ThreatCacheEntry[] }>(activeTab === 'threats' ? '/api/cache' : '', 30000);
+  const { data: summaryData, hasUpdated: summaryUpdated, refresh: refreshSummary, error: summaryError, isLoading: summaryLoading } = usePolling<{ summaries: AISummary[] }>(activeTab === 'ai' ? '/api/summary' : '', 30000);
+  const { data: behaviorData, hasUpdated: behaviorUpdated, error: behaviorError, isLoading: behaviorLoading, refresh: refreshBehavior } = usePolling<{ scores: BehaviorScore[] }>(activeTab === 'ai' ? '/api/behavior' : '', 30000);
 
-  const handleResolveIncident = async (id: string) => {
-    try {
-      const res = await fetch('/api/incident', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticket_id: id, status: 'closed' }),
-      });
-      if (!res.ok) alert('Could not update incident status.');
-    } catch {
-      alert('Could not reach the server.');
-    }
-  };
+  const { data: loginHistory, state: loginState } = useFetchOnce<AdminLoginEvent[]>('/api/admin/login-history', json => (Array.isArray(json) ? json : (json as { logs?: AdminLoginEvent[] })?.logs || []), []);
 
   const incidents = incidentData?.incidents || [];
-  const activeIncidents = incidents.filter(inc => inc.status !== 'closed');
   const cache = cacheData?.cache || [];
   const summaries = summaryData?.summaries || [];
   const scores = behaviorData?.scores || [];
 
   return (
-    <DashboardLayout role="soc" activeTab={activeTab} onTabChange={setActiveTab}>
+    <DashboardLayout role="soc" activeTab={activeTab} onTabChange={changeTab}>
       {activeTab === 'overview' && (
         <>
-          {(summaryError || behaviorError) && <p className="debt-error" role="alert">Telemetry belum dapat diperbarui. Snapshot terakhir ditampilkan, tanpa data contoh.</p>}
+          <p className="soc-page-description">{t('soc.incidents.help')}</p>
+          <IncidentQueue incidents={incidents} canResolve onChanged={refreshIncidents} loading={incidentsLoading} error={Boolean(incidentsError) && !incidentData} />
+        </>
+      )}
+      {activeTab === 'ai' && <>
+        <Tabs idPrefix="soc-insights" label={t('soc.insights')} selected={insightsView} onSelect={setInsightsView} tabs={[{ id: 'summary', label: t('soc.summary') }, { id: 'risk', label: t('nav.risk') }]} />
+        {insightsView === 'summary' ? <div role="tabpanel" id={panelId('soc-insights', 'summary')} aria-labelledby={tabId('soc-insights', 'summary')}>
+          {(summaryError || behaviorError) && <p className="debt-error" role="alert">{t('soc.err.telemetry')}</p>}
           <OverviewSection
             onRefreshSummary={refreshSummary}
             readOnly={false}
             stats={incidentData?.stats}
-            incidents={activeIncidents}
+            incidents={incidents}
             summaries={summaries}
             scores={scores}
             cache={cache}
-            complianceData={complianceData}
+            complianceData={null}
+            incidentsState={loadState(incidentsLoading, incidentsError, incidentData !== null, refreshIncidents)}
+            scoresState={loadState(behaviorLoading, behaviorError, behaviorData !== null, refreshBehavior)}
+            summariesState={loadState(summaryLoading, summaryError, summaryData !== null, refreshSummary)}
             incidentUpdated={incidentUpdated}
             cacheUpdated={cacheUpdated}
             summaryUpdated={summaryUpdated}
             behaviorUpdated={behaviorUpdated}
           />
-          <div style={{ marginTop: '24px' }}>
-            <IncidentTriageSection
-              readOnly={false}
-              incidents={activeIncidents}
-              onSelectIncident={() => {}}
-              onResolveIncident={handleResolveIncident}
-            />
-          </div>
-        </>
-      )}
+        </div> : <div role="tabpanel" id={panelId('soc-insights', 'risk')} aria-labelledby={tabId('soc-insights', 'risk')}><AIIntelligenceSection role="soc" readOnly={false} /></div>}
+      </>}
 
       {activeTab === 'threats' && (
-        <>
-          <ProxyOperationsSection />
-          <ThreatCacheSection
-            readOnly={false}
-            cacheData={cache}
-            threatTypeFilter={threatTypeFilter}
-            threatActionFilter={threatActionFilter}
-            onThreatTypeFilterChange={setThreatTypeFilter}
-            onThreatActionFilterChange={setThreatActionFilter}
-          />
-          <div style={{ marginTop: '24px' }}>
-            <LoginHistorySection readOnly={false} loginHistory={loginHistory} />
-          </div>
-        </>
+        <TrafficPolicies
+          cacheData={cache}
+          cacheState={loadState(cacheLoading, cacheError, cacheData !== null, refreshCache)}
+          threatTypeFilter={threatTypeFilter}
+          threatActionFilter={threatActionFilter}
+          onThreatTypeFilterChange={setThreatTypeFilter}
+          onThreatActionFilterChange={setThreatActionFilter}
+          loginHistory={loginHistory}
+          loginState={loginState}
+        />
       )}
 
-      {activeTab === 'ai' && (
-        <AIIntelligenceSection role="soc" readOnly={false} />
-      )}
-      {activeTab === 'inbox' && <SecurityInboxSection />}
+      {activeTab === 'audit' && <AuditLogSection />}
+      {activeTab === 'inbox' && <SecurityInboxSection canDecideAccess={true} onOpenIncidents={() => changeTab('overview')} />}
     </DashboardLayout>
   );
 }

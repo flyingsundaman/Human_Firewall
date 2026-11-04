@@ -6,8 +6,29 @@ const { resolve } = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 
+// English strings come from the real message table so the test follows copy changes.
+const messageExports = {};
+vm.runInNewContext(ts.transpileModule(readFileSync(resolve(__dirname, '../src/i18n/messages.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { exports: messageExports });
+const format = (template, vars = {}) => template.replace(/\{(\w+)\}/g, (match, name) => (name in vars ? String(vars[name]) : match));
+const stub = () => null;
+const shared = {
+  '@/i18n/I18nProvider': { useI18n: () => ({ lang: 'en', t: (key, vars) => format(messageExports.en[key], vars) }) },
+  '@/lib/serverError': { serverMessage: (body, t, fallback) => t(fallback) },
+  '@/components/ui/Dialog': { default: function Dialog() { return null; } },
+  '@/components/ui/SeverityBadge': { default: stub },
+  '@/components/ui/StateMessage': { default: stub },
+  '@/components/ui/StatusChip': { default: stub },
+  '@/components/ui/LoadGate': { default: stub },
+  '@/hooks/useScrollCue': { useScrollCue: () => [{ current: null }, ''] },
+  '@/lib/loadState': { loadState: (isLoading, error, hasData) => ({ status: hasData ? 'ready' : error ? 'error' : isLoading ? 'loading' : 'ready' }) },
+  '@/components/ui/Toast': { useToast: () => ({ show() {} }) },
+  '@/hooks/useNow': { useNow: () => Date.parse('2026-10-03T01:00:00Z') },
+  '@/lib/relativeTime': { formatAgo: () => 'ago' },
+};
+
 async function check(kind, action) {
   const states = [], effects = [], timers = [], writes = [];
+  const streamHandlers = {};
   let cursor = 0, firstRender = true, accepts = false;
   const hooks = {
     useState(initial) {
@@ -26,9 +47,9 @@ async function check(kind, action) {
   } }).outputText;
   const exports = {};
   vm.runInNewContext(compiled, {
-    exports, require: name => name === 'react' ? hooks : name === './DomainSecondOpinion' ? { default: () => null } : require(name),
+    exports, require: name => name === 'react' ? hooks : name in shared ? shared[name] : require(name),
     window: { setTimeout: callback => { timers.push(callback); }, clearTimeout() {} },
-    EventSource: class { addEventListener() {} close() {} },
+    EventSource: class { addEventListener(type, callback) { streamHandlers[type] = callback; } close() {} },
     fetch: async (url, options = {}) => {
       if (options.method === 'POST') {
         writes.push({ url, body: JSON.parse(options.body) });
@@ -52,10 +73,20 @@ async function check(kind, action) {
   }
   render(); effects.forEach(effect => effect()); timers.forEach(timer => timer());
   await new Promise(resolve => setImmediate(resolve));
-  const article = nodes(render()).find(node => node.type === 'article' && text(node).includes(`${kind}.example.test`));
-  const button = nodes(article).find(node => node.type === 'button' && text(node).trim().toLowerCase() === action);
+  if (kind === 'traffic') {
+    const pause = nodes(render()).find(n => n.type === 'button' && text(n) === 'Pause feed');
+    pause.props.onClick();
+    streamHandlers.update({ data: JSON.stringify({ type: 'traffic.observed', traffic: { event_id: 'traffic-new', domain: 'new.example.test', action: 'allow', method: 'CONNECT', decision_source: 'unknown', occurred_at: '2026-10-03T00:01:00Z' } }) });
+    assert.ok(!text(render()).includes('new.example.test'), 'paused view stays still while new events arrive');
+    nodes(render()).find(n => n.type === 'button' && text(n) === 'Resume feed').props.onClick();
+    assert.ok(text(render()).includes('new.example.test'), 'resuming shows events received during the pause');
+    assert.equal(writes.length, 0, 'pausing never changes protection or policy');
+  }
+  const row = nodes(render()).find(node => node.type === 'tr' && text(node).includes(`${kind}.example.test`));
+  const button = nodes(row).find(node => node.type === 'button' && text(node).trim().toLowerCase() === action);
   assert.ok(button, 'decision button exists'); button.props.onClick();
-  const dialog = () => nodes(render()).find(node => node.type === 'dialog');
+  // The shared Dialog is open when its `open` prop is true; its content is only built then.
+  const dialog = () => nodes(render()).find(node => node.props && node.props.open === true && typeof node.props.title === 'string');
   assert.ok(dialog(), 'click opens confirmation'); assert.equal(writes.length, 0, 'opening is read-only');
   const textarea = () => nodes(dialog()).find(node => node.type === 'textarea');
   const submit = () => nodes(dialog()).find(node => node.type === 'form').props.onSubmit({ preventDefault() {} });
@@ -63,7 +94,8 @@ async function check(kind, action) {
   await submit(); assert.equal(writes.length, 0, 'blank reason is rejected');
   textarea().props.onChange({ target: { value: '  Reviewed by SOC  ' } });
   await submit(); assert.ok(dialog(), 'API failure keeps the dialog open');
-  assert.ok(text(dialog()).includes('Policy rejected'), 'API error is visible');
+  assert.ok(text(dialog()).includes('The decision was not saved.'), 'a readable error is visible');
+  assert.ok(!text(dialog()).includes('Policy rejected'), 'the server text in another language is never shown raw');
   accepts = true; await submit(); assert.equal(dialog(), undefined, 'success closes the dialog');
   const write = writes.at(-1);
   assert.equal(write.body.reason, 'Reviewed by SOC'); assert.equal(write.body.action, action);
