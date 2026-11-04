@@ -208,7 +208,7 @@ export default function EmployeeUrlScanner({ onReportComplete }: { onReportCompl
       <ThreatEvidence analysis={fileResult.analysis} /></div>
     </div>}
     {scan && <div className="debt-result" role="status">
-      <strong>{scan.pending ? 'Analysis queued — results update here' : scan.verdict === 'unknown' ? t('scan2.url.unknown') : (['malicious', 'suspicious', 'clean'].includes(scan.verdict) ? t(`scan2.url.verdict.${scan.verdict}` as MessageKey) : scan.verdict)}</strong>
+      <strong>{['malicious', 'suspicious', 'clean'].includes(scan.verdict) ? t(`scan2.url.verdict.${scan.verdict}` as MessageKey) : scan.pending ? 'Analysis queued — results update here' : scan.verdict === 'unknown' ? t('scan2.url.unknown') : scan.verdict}</strong>
       <ThreatEvidence analysis={scan} />
       <p>{t('scan2.url.notDecision')}</p>
     </div>}

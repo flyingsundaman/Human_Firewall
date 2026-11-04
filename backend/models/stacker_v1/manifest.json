@@ -1,12 +1,12 @@
 {
   "model_type": "Stacker (XGBoost Continuous Learning + Enriched TF-IDF + Tranco Features)",
-  "model_revision": "stacker-xgb-v1:20261104-0740",
-  "trained_at": "2026-11-04T07:40:29.718756+00:00",
+  "model_revision": "stacker-xgb-v1:20261104-0951",
+  "trained_at": "2026-11-04T09:51:49.757170+00:00",
   "training_unique_domains": 27989,
   "block_threshold": 0.85,
   "fpr_budget": 0.003,
   "enforcement_eligible": true,
-  "training_seconds": 12.995925930095837,
+  "training_seconds": 8.012126465095207,
   "golden_gate_evaluation": {
     "benign_eval": {
       "google.com": 0.00019999999494757503,

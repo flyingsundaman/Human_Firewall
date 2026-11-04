@@ -75,8 +75,12 @@ def scan(domain):
         return {'verdict': 'unknown', 'confidence': None, 'status': 'ready',
             'reason': 'Hostname layanan ber-ID/hash: di luar cakupan kalibrasi. Unknown, bukan bukti malicious atau whitelist; SOC tetap dapat memblokir.',
             'modelVersion': model_version()}
-    margin = _model["pipeline"].decision_function([domain]).reshape(-1, 1)
-    probability = float(_model["calibrator"].predict_proba(margin)[0, 1])
+    calibrator = _model.get("calibrator")
+    if calibrator is not None and getattr(calibrator, "n_features_in_", 1) == 1:
+        margin = _model["pipeline"].decision_function([domain]).reshape(-1, 1)
+        probability = float(calibrator.predict_proba(margin)[0, 1])
+    else:
+        probability = float(_model["pipeline"].predict_proba([domain])[0, 1])
     if not math.isfinite(probability) or not 0 <= probability <= 1:
         raise ValueError("Non-finite domain prediction")
     threshold = _manifest.get("block_threshold")

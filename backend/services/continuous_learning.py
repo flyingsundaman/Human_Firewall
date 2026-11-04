@@ -393,9 +393,12 @@ class ContinuousLearningEngine:
             self.models_dir.mkdir(parents=True, exist_ok=True)
             self.base_model_dir.mkdir(parents=True, exist_ok=True)
 
-            # Save base TF-IDF pipeline so stacker_scanner can use it
+            # Save base TF-IDF pipeline so stacker_scanner and domain_scanner can use it
             base_artifact_path = self.base_model_dir / "classifier.joblib"
-            joblib.dump({"pipeline": tfidf_pipe, "calibrator": tfidf_pipe.named_steps["logisticregression"]}, base_artifact_path)
+            platt_calibrator = LogisticRegression(random_state=42)
+            train_margins = tfidf_pipe.decision_function([r[0] for r in train_rows]).reshape(-1, 1)
+            platt_calibrator.fit(train_margins, y_train)
+            joblib.dump({"pipeline": tfidf_pipe, "calibrator": platt_calibrator}, base_artifact_path)
             base_manifest_path = self.base_model_dir / "manifest.json"
             if base_manifest_path.exists():
                 try:

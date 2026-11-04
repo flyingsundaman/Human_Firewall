@@ -56,18 +56,39 @@ def analyze_url(url):
         analysis = json.loads(cached.get('raw_json') or '{}') if cached else {}
     except (ValueError, TypeError):
         analysis = {}
-    if analysis.get('analysisVersion') == 4 and analysis.get('providerStatus', {}).get('virustotal', {}).get('state') == 'ready':
+    if analysis.get('analysisVersion') == 5 and analysis.get('providerStatus', {}).get('virustotal', {}).get('state') == 'ready':
         return analysis
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         tasks = [(provider, pool.submit(scan, url)) for provider, scan in (
-            ('virustotal', integrations.scan_virustotal), ('urlscan', integrations.scan_urlscan))]
+            ('virustotal', integrations.scan_virustotal),
+            ('urlscan', integrations.scan_urlscan),
+            ('afferent_ml', integrations.scan_afferent_ml),
+        )]
         results = []
         for provider, task in tasks:
             try:
                 results.append(task.result())
             except Exception:
                 results.append({'success': False, 'provider': provider, 'status_code': 502})
-    analysis = _combine(results, (integrations.normalize_virustotal, integrations.normalize_urlscan), version=4)
+    analysis = _combine(
+        results[:2],
+        (integrations.normalize_virustotal, integrations.normalize_urlscan),
+        version=5,
+    )
+    ml_res = results[2] if len(results) > 2 else {'success': False, 'provider': 'afferent_ml', 'status_code': 502}
+    ml_item = integrations.normalize_afferent_ml(ml_res)
+    if ml_item:
+        analysis['evidence']['afferent_ml'] = ml_item
+        if 'afferent_ml' not in analysis['providers']:
+            analysis['providers'].insert(0, 'afferent_ml')
+        # Promote verdict if external providers had no record/verdict or if ML detected malicious
+        if ml_item['verdict'] == 'malicious' or (
+            analysis['verdict'] == 'unknown'
+            and ml_item['verdict'] == 'clean'
+            and analysis['providerStatus'].get('virustotal', {}).get('state') in ('ready', 'no_record', 'queued')
+        ):
+            analysis = summarize(analysis['evidence'], {**analysis['providerStatus'], 'afferent_ml': integrations.provider_status(ml_res)}, version=5)
+    analysis['providerStatus']['afferent_ml'] = integrations.provider_status(ml_res)
     if results[0].get('status_code') == 404:
         from services.url_scan_service import queue
         return queue(url, analysis)

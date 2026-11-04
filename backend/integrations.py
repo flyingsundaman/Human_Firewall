@@ -493,6 +493,47 @@ def normalize_urlscan(result):
 
 
 # ==========================================================
+# Afferent Local ML Scanner (Stacker XGBoost v4 + Domain v3)
+# ==========================================================
+
+def scan_afferent_ml(url: str):
+    """Evaluate URL hostname using calibrated Stacker XGBoost + Domain v3 ML."""
+    try:
+        from services import stacker_scanner
+        res = stacker_scanner.scan(url)
+        if not isinstance(res, dict) or res.get("status") != "ready":
+            return {"success": False, "provider": "afferent_ml", "status_code": 503, "data": None}
+        return {"success": True, "provider": "afferent_ml", "status_code": 200, "data": res}
+    except Exception as exc:
+        return {"success": False, "provider": "afferent_ml", "status_code": 502, "error": str(exc), "data": None}
+
+
+def normalize_afferent_ml(result):
+    if not isinstance(result, dict) or not result.get("success"):
+        return None
+    data = result.get("data") or {}
+    raw_verdict = data.get("verdict", "unknown")
+    if raw_verdict == "safe":
+        verdict, severity = "clean", "low"
+    elif raw_verdict == "malicious":
+        verdict, severity = "malicious", "high"
+    elif raw_verdict == "suspicious":
+        verdict, severity = "suspicious", "medium"
+    else:
+        verdict, severity = "unknown", "medium"
+    conf = data.get("confidence")
+    conf_pct = round(float(conf) * 100) if isinstance(conf, (int, float)) else 0
+    return {
+        "provider": "afferent_ml",
+        "verdict": verdict,
+        "severity": severity,
+        "confidence": conf_pct,
+        "model_version": data.get("modelVersion") or "stacker-xgb-v1",
+        "reason": data.get("reason", ""),
+    }
+
+
+# ==========================================================
 # Char-BiLSTM Deep Learning Scanner (Afferent v5)
 # ==========================================================
 
